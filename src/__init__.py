@@ -58,6 +58,10 @@ translations_dict = {
             "*",
             "Multiply emissive color by emissive power",
         ): "放射色に放射強度を掛けます",
+        (
+            "*",
+            "Principled BSDF node not found in material: ",
+        ): "マテリアルにPrincipled BSDFノードが見つかりませんでした: ",
     }
 }
 

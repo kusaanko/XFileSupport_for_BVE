@@ -142,10 +142,20 @@ class ModelDataUtility:
                                 nodes = material.node_tree.nodes
                                 # プリンシプルBSDFを取得
                                 principled = next(
-                                    n
-                                    for n in nodes
-                                    if n.bl_idname == "ShaderNodeBsdfPrincipled"
+                                    (
+                                        n
+                                        for n in nodes
+                                        if n.bl_idname == "ShaderNodeBsdfPrincipled"
+                                    ),
+                                    None,
                                 )
+                                if principled is None:
+                                    raise Exception(
+                                        bpy.app.translations.pgettext(
+                                            "Principled BSDF node not found in material: "
+                                        )
+                                        + f" {material.name}"
+                                    )
                                 # テクスチャの有無を確認
                                 if len(principled.inputs["Base Color"].links) > 0:
                                     for link in principled.inputs["Base Color"].links:
@@ -227,8 +237,16 @@ class ModelDataUtility:
                 nodes = material.node_tree.nodes
                 # プリンシプルBSDFを取得
                 principled = next(
-                    n for n in nodes if n.bl_idname == "ShaderNodeBsdfPrincipled"
+                    (n for n in nodes if n.bl_idname == "ShaderNodeBsdfPrincipled"),
+                    None,
                 )
+                if principled is None:
+                    raise Exception(
+                        bpy.app.translations.pgettext(
+                            "Principled BSDF node not found in material: "
+                        )
+                        + f" {material.name}"
+                    )
 
                 # ベースカラー
                 if len(principled.inputs["Base Color"].links) > 0:
