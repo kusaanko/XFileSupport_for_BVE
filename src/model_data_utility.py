@@ -49,7 +49,7 @@ def gen_fake_material():
 
     nodes = material.node_tree.nodes
     # プリンシプルBSDFを取得 / Get the Principled BSDF
-    principled = next(n for n in nodes if n.type == "BSDF_PRINCIPLED")
+    principled = next(n for n in nodes if n.bl_idname == "ShaderNodeBsdfPrincipled")
 
     # ベースカラーを設定 / Set the base color
     principled.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
