@@ -6,7 +6,6 @@ from bpy.props import (
     EnumProperty,
     IntProperty,
 )
-from bpy.types import NodeTreeInterfaceSocket
 
 
 # Custom node type

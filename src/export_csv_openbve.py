@@ -3,9 +3,6 @@ from bpy.props import (
     StringProperty,
     BoolProperty,
     FloatProperty,
-    FloatVectorProperty,
-    EnumProperty,
-    IntProperty,
 )
 from bpy_extras.io_utils import ExportHelper
 from .model_data_utility import ModelDataUtility

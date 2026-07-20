@@ -3,13 +3,10 @@ import mathutils
 import struct
 import zlib
 import os
-import re
 from typing import Self
 import bpy
 from bpy.props import StringProperty, BoolProperty, FloatProperty, EnumProperty
 from bpy_extras.io_utils import ImportHelper, ExportHelper
-import zlib
-from typing import Self
 
 from .utility import float_to_str, vertex_to_str
 from . import utility
