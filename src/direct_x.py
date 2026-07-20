@@ -275,11 +275,11 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
             # Blenderに記録する際に使用する頂点のインデックス / Index of the vertex used when recording in Blender
             indexes.reverse()
             vertexes = []
-            for l in range(len(indexes)):
-                if indexes[l] in mesh_vertexes_redirect:
-                    vertexes.append(mesh_vertexes_redirect[indexes[l]])
+            for idx in range(len(indexes)):
+                if indexes[idx] in mesh_vertexes_redirect:
+                    vertexes.append(mesh_vertexes_redirect[indexes[idx]])
                 else:
-                    vertexes.append(indexes[l])
+                    vertexes.append(indexes[idx])
             mesh_faces.append(vertexes)
             # Xファイルに記述された実際の使用する頂点のインデックス(UV登録時に使用) / Actual vertex index used in the X file (used when registering UV)
             mesh_faces_exact.append(indexes)
@@ -450,7 +450,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
             scene.collection.objects.link(obj)
 
     def parse_mesh_text(self, mesh: XModelMesh):
-        object_name = self.get_object_name_text()
+        _object_name = self.get_object_name_text()
         vertex_size = self.get_next_int_text()
         for _ in range(vertex_size):
             vertex = [
@@ -479,14 +479,14 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
             token = self.get_next_token_text()
 
     def parse_mesh_texture_coords_text(self, mesh: XModelMesh):
-        object_name = self.get_object_name_text()
+        _object_name = self.get_object_name_text()
         vertex_size = self.get_next_int_text()
         for _ in range(vertex_size):
             uv = [self.get_next_float_text(), self.get_next_float_text()]
             mesh.tex_coords.append(uv)
 
     def parse_mesh_material_list_text(self, mesh: XModelMesh):
-        object_name = self.get_object_name_text()
+        _object_name = self.get_object_name_text()
         mesh.material_count = self.get_next_int_text()
         face_count = self.get_next_int_text()
         for _ in range(face_count):

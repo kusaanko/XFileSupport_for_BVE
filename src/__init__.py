@@ -10,7 +10,6 @@ from .export_csv_openbve import ExportOpenBveCSVFile
 from .types import CustomOpenBveCsvNode
 from .export_csv import ExportCSVFile
 from .direct_x import ExportDirectXXFile, ImportDirectXXFile
-from bl_ui import node_add_menu
 
 # locale
 #    (target_context, key): translated_str
