@@ -3,7 +3,7 @@ schema_version = "1.0.0"
 # Example of manifest file for a Blender extension
 # Change the values according to your extension
 id = "bve_import_export"
-version = "5.1.3"
+version = "5.1.4"
 name = "BVE Import/Export"
 tagline = "Import/Export DirectX X (.x) or Export CSV files for BVE/OpenBVE"
 maintainer = "Kusaanko"
