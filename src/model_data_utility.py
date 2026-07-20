@@ -98,7 +98,9 @@ class ModelDataUtility:
                 # Meshに変換
                 mesh = obj_tmp.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
                 
-                uv_vertexes = mesh.uv_layers.active.data
+                # UVマップが存在しないメッシュではactiveがNoneになる
+                uv_layer = mesh.uv_layers.active
+                uv_vertexes = uv_layer.data if uv_layer is not None else None
                 vertex_index = 0
                 # 法線取得用
                 loops = mesh.loops
@@ -148,7 +150,10 @@ class ModelDataUtility:
                         vertex_co[2] *= scale
                         # 頂点が他のデータと重複していたらそれを使用する
                         # 頂点とUVはセットなのでセットで重複を調べる
-                        uv = uv_vertexes[vertex_index].uv
+                        if uv_vertexes is not None:
+                            uv = uv_vertexes[vertex_index].uv
+                        else:
+                            uv = (0.0, 0.0)
                         if texture == "":
                             uv = (0.0, 0.0)
                         key = vertex_to_str(vertex_co) + str(uv)
@@ -236,11 +241,12 @@ class ModelDataUtility:
                             x_material.face_color[3]
                         )
                 # 鏡面反射
+                # default_valueへの参照を保持するとマテリアル削除後にクラッシュするため値をコピーする
                 x_material.power = principled.inputs['Specular IOR Level'].default_value
-                x_material.specular_color = principled.inputs['Specular Tint'].default_value
+                x_material.specular_color = tuple(principled.inputs['Specular Tint'].default_value)
 
                 # 放射色
-                x_material.emission_color = principled.inputs['Emission Color'].default_value
+                x_material.emission_color = tuple(principled.inputs['Emission Color'].default_value)
                 x_material.emissive_power = principled.inputs['Emission Strength'].default_value
 
                 if texture != "":
@@ -269,11 +275,11 @@ class ModelDataUtility:
                          
             else:
                 # ベースカラー
-                x_material.face_color = material.diffuse_color
+                x_material.face_color = tuple(material.diffuse_color)
                 # 鏡面反射
                 x_material.power = material.specular_intensity
                 # 鏡面反射色
-                x_material.specular_color = material.specular_color
+                x_material.specular_color = tuple(material.specular_color)
                 # 放射色
                 x_material.emission_color = (0.0, 0.0, 0.0, 1.0)
                 # 放射強度
