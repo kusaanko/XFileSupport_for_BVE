@@ -470,7 +470,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         brace_count = self.text_brace_count
 
         token = self.get_next_token_text()
-        while token != None and self.text_brace_count >= brace_count:
+        while token is not None and self.text_brace_count >= brace_count:
             if brace_count == self.text_brace_count:
                 if token == "MeshMaterialList":
                     self.parse_mesh_material_list_text(mesh)
@@ -494,7 +494,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
 
         brace_count = self.text_brace_count
         token = self.get_next_token_text()
-        while token != None and self.text_brace_count >= brace_count:
+        while token is not None and self.text_brace_count >= brace_count:
             if brace_count == self.text_brace_count:
                 if token == "Material":
                     self.parse_material_text(mesh)
@@ -529,7 +529,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
 
         brace_count = self.text_brace_count
         token = self.get_next_token_text()
-        while token != None and self.text_brace_count >= brace_count:
+        while token is not None and self.text_brace_count >= brace_count:
             if brace_count == self.text_brace_count:
                 if token == "TextureFilename":
                     material.texture_path = self.get_next_string_text()
@@ -543,7 +543,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
 
         brace_count = self.text_brace_count
         token = self.get_next_token_text()
-        while token != None and self.text_brace_count >= brace_count:
+        while token is not None and self.text_brace_count >= brace_count:
             if brace_count == self.text_brace_count:
                 if token == "FrameTransformMatrix":
                     self.skip_until_text("{")
@@ -650,7 +650,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         while token == ";" or token == ",":
             token = self.get_next_token_text()
 
-        if token == None:
+        if token is None:
             raise Exception("Unexpected end of file")
 
         return int(token)
@@ -660,7 +660,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         while token == ";" or token == ",":
             token = self.get_next_token_text()
 
-        if token == None:
+        if token is None:
             raise Exception("Unexpected end of file")
 
         return float(token)
@@ -912,11 +912,11 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                     MSZIP_BLOCK = 0x8000
                     MSZIP_MAGIC = int.from_bytes("CK".encode(), byteorder="little")
 
-                    unzipped_size = compressed_byte_buffer.get_int()
+                    _unzipped_size = compressed_byte_buffer.get_int()
 
                     self.byte_buffer = utility.ByteBuffer(bytes())
                     while compressed_byte_buffer.has_remaining():
-                        uncompressed_size = compressed_byte_buffer.get_short()
+                        _uncompressed_size = compressed_byte_buffer.get_short()
                         block_size = compressed_byte_buffer.get_short()
                         magic = compressed_byte_buffer.get_short()
                         if block_size > MSZIP_BLOCK:
@@ -952,7 +952,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                 root_node = XModelNode()
 
                 token = self.get_next_token_text()
-                while token != None:
+                while token is not None:
                     if self.text_brace_count == 0:
                         if token == "template":
                             self.get_next_token_text()
