@@ -16,7 +16,10 @@ from bl_ui import node_add_menu
 #    (target_context, key): translated_str
 translations_dict = {
     "ja_JP": {
-        ("*", "Remove All Objects and Materials"): "全てのオブジェクトとマテリアルを削除する",
+        (
+            "*",
+            "Remove All Objects and Materials",
+        ): "全てのオブジェクトとマテリアルを削除する",
         ("*", "Gamma correction"): "ガンマ補正",
         ("*", "This file is not X file!"): "このファイルはXファイルではありません！",
         ("*", "Output mode"): "出力モード",
@@ -29,7 +32,10 @@ translations_dict = {
         ("*", "Export onyl selected objects"): "選択したオブジェクトのみエクスポート",
         ("*", "Export only necessary data"): "必要なデータのみエクスポート",
         ("*", "Gamma correction is not 2.2"): "ガンマ補正は2.2である必要があります",
-        ("*", "This plug-in is for Bve. So some features are not supported."): "このプラグインはBve向けです。そのため、一部の機能はサポートされていません。",
+        (
+            "*",
+            "This plug-in is for Bve. So some features are not supported.",
+        ): "このプラグインはBve向けです。そのため、一部の機能はサポートされていません。",
         ("*", "For OpenBVE"): "OpenBVE向け",
         ("*", "Use decal transparent color"): "透過色を使用する",
         ("*", "Decal transparent color"): "テクスチャの透過色",
@@ -38,30 +44,46 @@ translations_dict = {
         ("*", "Nighttime texture"): "夜間テクスチャ",
         ("*", "Glow attenuation mode"): "Glow減衰モード",
         ("*", "OpenBVE CSV Properties"): "OpenBVE CSVプロパティ",
-        ("*", "Use texture name instead of texture path"): "テクスチャのパスの代わりにテクスチャ名を使用する",
-        ("*", "This is useful when you want to use a relative path"): "相対パスを使用したい場合に便利です",
+        (
+            "*",
+            "Use texture name instead of texture path",
+        ): "テクスチャのパスの代わりにテクスチャ名を使用する",
+        (
+            "*",
+            "This is useful when you want to use a relative path",
+        ): "相対パスを使用したい場合に便利です",
         ("*", "Use AddFace2"): "AddFace2を使用する",
         ("*", "Use AddFace2 instead of AddFace"): "AddFaceの代わりにAddFace2を使用する",
         ("*", "Use emissive power"): "放射強度を使用する",
-        ("*", "Multiply emissive color by emissive power"): "放射色に放射強度を掛けます",
+        (
+            "*",
+            "Multiply emissive color by emissive power",
+        ): "放射色に放射強度を掛けます",
     }
 }
 
+
 # メニューに追加 / Add to the menu
 def menu_func_import(self, context):
-    self.layout.operator(ImportDirectXXFile.bl_idname, text="DirectX XFile (.x) for BVE")
+    self.layout.operator(
+        ImportDirectXXFile.bl_idname, text="DirectX XFile (.x) for BVE"
+    )
 
 
 def menu_func_export(self, context):
-    self.layout.operator(ExportDirectXXFile.bl_idname, text="DirectX XFile (.x) for BVE")
+    self.layout.operator(
+        ExportDirectXXFile.bl_idname, text="DirectX XFile (.x) for BVE"
+    )
     self.layout.operator(ExportCSVFile.bl_idname, text="CSV (.csv) for BVE")
     self.layout.operator(ExportOpenBveCSVFile.bl_idname, text="CSV (.csv) for OpenBVE")
+
 
 def add_node_to_menu(self, context):
     layout = self.layout
     props = layout.operator("node.add_node", text="OpenBVE CSV Properties")
     props.type = CustomOpenBveCsvNode.bl_idname
     return props
+
 
 classes = (
     ImportDirectXXFile,
@@ -70,6 +92,7 @@ classes = (
     ExportOpenBveCSVFile,
     CustomOpenBveCsvNode,
 )
+
 
 def register():
     for cls in classes:

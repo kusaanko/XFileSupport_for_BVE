@@ -4,25 +4,23 @@ from bpy_extras.io_utils import ExportHelper
 from .model_data_utility import ModelDataUtility
 from .utility import float_to_str, vertex_to_str
 
+
 # CSVファイルに出力 / Export to CSV file
 class ExportCSVFile(bpy.types.Operator, ExportHelper):
     bl_idname = "export.csv_for_bve"
-    bl_description = 'Export to BVE CSV file (.csv)'
+    bl_description = "Export to BVE CSV file (.csv)"
     bl_label = "Export BVE CSV File"
-    bl_space_type = 'PROPERTIES'
-    bl_region_type = 'WINDOW'
-    bl_options = {'UNDO'}
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_options = {"UNDO"}
 
-    filepath: StringProperty(
-        name="export file",
-        subtype='FILE_PATH'
-    )
+    filepath: StringProperty(name="export file", subtype="FILE_PATH")
 
     filename_ext = ".csv"
 
     filter_glob: StringProperty(
         default="*.csv",
-        options={'HIDDEN'},
+        options={"HIDDEN"},
     )
 
     scale: FloatProperty(
@@ -43,7 +41,7 @@ class ExportCSVFile(bpy.types.Operator, ExportHelper):
     decal_transparent_color: FloatVectorProperty(
         name="Decal transparent color",
         size=4,
-        subtype='COLOR',
+        subtype="COLOR",
         default=(0.0, 0.0, 0.0, 1.0),
     )
 
@@ -52,10 +50,15 @@ class ExportCSVFile(bpy.types.Operator, ExportHelper):
 
     def execute(self, context):
         if not self.filepath.endswith(".csv"):
-            return {'CANCELLED'}
+            return {"CANCELLED"}
 
         model_data_utility = ModelDataUtility()
-        model_data_utility.execute(context, export_selected_only=self.export_selected_only, scale=self.scale, gamma_correction=self.gamma_correction)
+        model_data_utility.execute(
+            context,
+            export_selected_only=self.export_selected_only,
+            scale=self.scale,
+            gamma_correction=self.gamma_correction,
+        )
         vertexes = model_data_utility.vertexes
         faces = model_data_utility.faces
         x_materials = model_data_utility.x_materials
@@ -66,7 +69,7 @@ class ExportCSVFile(bpy.types.Operator, ExportHelper):
 
         # マテリアルごとに作成 / Create for each material
         for material_index in range(len(x_materials)):
-            csv_file_content += 'CreateMeshBuilder,\n'
+            csv_file_content += "CreateMeshBuilder,\n"
             vertices_dict = {}
             vertices_list = []
             uv_vertices_list = []
@@ -94,7 +97,15 @@ class ExportCSVFile(bpy.types.Operator, ExportHelper):
                 faces_no_duplicates.append(vertex_indices)
             # 頂点データ / Vertex data
             for vertex in vertices_list:
-                csv_file_content += "AddVertex," + float_to_str(vertex[0]) + "," + float_to_str(vertex[2]) + "," + float_to_str(vertex[1]) + "\n"
+                csv_file_content += (
+                    "AddVertex,"
+                    + float_to_str(vertex[0])
+                    + ","
+                    + float_to_str(vertex[2])
+                    + ","
+                    + float_to_str(vertex[1])
+                    + "\n"
+                )
             # 面データ / Face data
             for face in faces_no_duplicates:
                 csv_file_content += "AddFace,"
@@ -105,23 +116,43 @@ class ExportCSVFile(bpy.types.Operator, ExportHelper):
             has_texture = False
             if x_material.texture_path != "":
                 csv_file_content += "LoadTexture," + x_material.texture_path + "\n"
-                csv_file_content += "SetDecalTransparentColor," + \
-                    str(round(self.decal_transparent_color[0] * 255)) + "," + \
-                    str(round(self.decal_transparent_color[1] * 255)) + "," + \
-                    str(round(self.decal_transparent_color[2] * 255)) + "," + \
-                    str(round(self.decal_transparent_color[3] * 255)) + "\n"
+                csv_file_content += (
+                    "SetDecalTransparentColor,"
+                    + str(round(self.decal_transparent_color[0] * 255))
+                    + ","
+                    + str(round(self.decal_transparent_color[1] * 255))
+                    + ","
+                    + str(round(self.decal_transparent_color[2] * 255))
+                    + ","
+                    + str(round(self.decal_transparent_color[3] * 255))
+                    + "\n"
+                )
                 has_texture = True
             # 面色 / Face color
-            csv_file_content += "SetColor," + \
-                str(round(x_material.face_color[0] * 255)) + "," + \
-                str(round(x_material.face_color[1] * 255)) + "," + \
-                str(round(x_material.face_color[2] * 255)) + "," + \
-                str(round(x_material.face_color[3] * 255)) + "\n"
+            csv_file_content += (
+                "SetColor,"
+                + str(round(x_material.face_color[0] * 255))
+                + ","
+                + str(round(x_material.face_color[1] * 255))
+                + ","
+                + str(round(x_material.face_color[2] * 255))
+                + ","
+                + str(round(x_material.face_color[3] * 255))
+                + "\n"
+            )
             # UVデータ / UV data
             if has_texture:
                 for i in range(0, len(uv_vertices_list)):
-                    csv_file_content += "SetTextureCoordinates," + str(i) + "," + float_to_str(uv_vertices_list[i][0]) + "," + float_to_str(-uv_vertices_list[i][1] + 1) + "\n"
+                    csv_file_content += (
+                        "SetTextureCoordinates,"
+                        + str(i)
+                        + ","
+                        + float_to_str(uv_vertices_list[i][0])
+                        + ","
+                        + float_to_str(-uv_vertices_list[i][1] + 1)
+                        + "\n"
+                    )
 
-        with open(self.filepath, mode='w') as f:
+        with open(self.filepath, mode="w") as f:
             f.write(csv_file_content)
-        return {'FINISHED'}
+        return {"FINISHED"}

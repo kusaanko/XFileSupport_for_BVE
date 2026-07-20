@@ -48,6 +48,7 @@ TOKEN_UNICODE = 0x32
 TOKEN_CSTRING = 0x33
 TOKEN_ARRAY = 0x34
 
+
 class XModelMesh:
     vertices = []
     faces: list[list[int]] = []
@@ -68,6 +69,7 @@ class XModelMesh:
         self.material_face_indexes = []
         self.material_count = 0
 
+
 class XModelNode:
     node_name: str | None
     transform_matrix: mathutils.Matrix = mathutils.Matrix.Identity(4)
@@ -80,12 +82,14 @@ class XModelNode:
         self.mesh = XModelMesh()
         self.children = []
 
+
 class XElement:
     element_type = ""
     data = ""
     children = []
     end_line_num = 0
     name = ""
+
 
 class XMaterial:
     face_color: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
@@ -94,6 +98,7 @@ class XMaterial:
     emission_color: tuple[float, float, float] = (0.0, 0.0, 0.0)
     texture_path: str | None = ""
     name: str | None = ""
+
 
 def to_XElement(x_model_file_string, start_line_num):
     element_type = ""
@@ -112,11 +117,11 @@ def to_XElement(x_model_file_string, start_line_num):
 
         if "{" in line:
             if element_type == "":
-                element_type = re.sub('\t', "", line[0:line.index("{")])
-                element_type = re.sub('^ *', "", element_type)
+                element_type = re.sub("\t", "", line[0 : line.index("{")])
+                element_type = re.sub("^ *", "", element_type)
                 if element_type.find(" ") != -1:
-                    element_name = element_type[element_type.find(" ") + 1:]
-                    element_type = element_type[0:element_type.find(" ")]
+                    element_name = element_type[element_type.find(" ") + 1 :]
+                    element_type = element_type[0 : element_type.find(" ")]
                     search_result = re.search("[^ ]*", element_name)
                     if search_result:
                         element_name = search_result.group(0)
@@ -141,16 +146,17 @@ def to_XElement(x_model_file_string, start_line_num):
     result.name = element_name
     return result
 
+
 def write_int(f, i):
-    f.write(i.to_bytes(4, byteorder='little'))
+    f.write(i.to_bytes(4, byteorder="little"))
 
 
 def write_short(f, i):
-    f.write(i.to_bytes(2, byteorder='little'))
+    f.write(i.to_bytes(2, byteorder="little"))
 
 
 def write_float(f, i):
-    f.write(struct.pack('<f', float(i)))
+    f.write(struct.pack("<f", float(i)))
 
 
 def write_shorts(f, shorts):
@@ -181,26 +187,23 @@ def write_float_list(f, f_list):
     write_int(f, len(f_list))
     for i in f_list:
         write_float(f, i)
-        
+
 
 class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
     bl_idname = "import.directx_x_for_bve"
-    bl_description = 'Import from X file (.x)'
+    bl_description = "Import from X file (.x)"
     bl_label = "Import DirectX X File"
-    bl_space_type = 'PROPERTIES'
-    bl_region_type = 'WINDOW'
-    bl_options = {'UNDO'}
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_options = {"UNDO"}
 
-    filepath: StringProperty(
-        name="input file",
-        subtype='FILE_PATH'
-    )
+    filepath: StringProperty(name="input file", subtype="FILE_PATH")
 
     filename_ext = ".x"
 
     filter_glob: StringProperty(
         default="*.x",
-        options={'HIDDEN'},
+        options={"HIDDEN"},
     )
 
     remove_all: BoolProperty(
@@ -208,10 +211,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         default=True,
     )
 
-    scale: FloatProperty(
-        name="Scale",
-        default=1.0
-    )
+    scale: FloatProperty(name="Scale", default=1.0)
 
     gamma_correction: BoolProperty(
         name="Gamma correction",
@@ -221,7 +221,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.initialize()
-    
+
     def initialize(self):
         self.is_binary = False
         self.float_size = 32
@@ -237,7 +237,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         self.text_brace_count = 0
         self.bin_brace_count = 0
         self.object_index = 0
-    
+
     def create_obj_from_node(self, matrix: mathutils.Matrix, node: XModelNode):
         if matrix is None:
             matrix = mathutils.Matrix.Identity(4)
@@ -253,7 +253,11 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         for vertex in mesh.vertices:
             # DirectX X Y Z
             # Blender X Z Y
-            vector = (vertex[0] * self.scale, vertex[2] * self.scale, vertex[1] * self.scale)
+            vector = (
+                vertex[0] * self.scale,
+                vertex[2] * self.scale,
+                vertex[1] * self.scale,
+            )
             # 重複した座標は1つにまとめる / Combine duplicate coordinates into one
             # リダイレクト先を登録しておく / Register the redirect destination
             if vector in mesh_vertexes:
@@ -288,10 +292,10 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         for vertex in mesh.tex_coords:
             vertex[1] = -vertex[1] + 1
             mesh_tex_coord.append(vertex)
-            
+
         for index in mesh.material_face_indexes:
             mesh_material_face_indexes.append(index)
-        
+
         for material in mesh.materials:
             mesh_materials.append(material)
         material_faces: list[list[int]] = []
@@ -308,7 +312,11 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                 material_faces[material_id].append(i)
 
         # モデル名を決定 / Determine the model name
-        model_name = (node.node_name if node.node_name is not None and len(node.node_name) != 0 else os.path.splitext(bpy.path.basename(self.filepath))[0]) + str(self.object_index)
+        model_name = (
+            node.node_name
+            if node.node_name is not None and len(node.node_name) != 0
+            else os.path.splitext(bpy.path.basename(self.filepath))[0]
+        ) + str(self.object_index)
         self.object_index += 1
 
         # マテリアルごとにオブジェクトを作成 / Create objects for each material
@@ -319,7 +327,9 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
             if len(faces) == 0:
                 continue
             # マテリアルの有無 / Presence or absence of materials
-            available_material = len(mesh_materials) > mesh_material_face_indexes[faces[0]]
+            available_material = (
+                len(mesh_materials) > mesh_material_face_indexes[faces[0]]
+            )
             x_material: XMaterial = mesh_materials[mesh_material_face_indexes[faces[0]]]
             # マテリアルを作成 / Create material
             material_name = model_name + "Material"
@@ -328,13 +338,13 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
             material = bpy.data.materials.new(material_name)
 
             # ブレンドモードの設定 / Setting the blend mode
-            material.blend_method = 'CLIP'
+            material.blend_method = "CLIP"
 
             # ノードを有効化 / Enable nodes
             material.use_nodes = True
             nodes = material.node_tree.nodes
             # プリンシプルBSDFを取得 / Get the principle BSDF
-            principled = next(n for n in nodes if n.type == 'BSDF_PRINCIPLED')
+            principled = next(n for n in nodes if n.type == "BSDF_PRINCIPLED")
 
             color = (1.0, 1.0, 1.0)
             material.specular_intensity = 0.0
@@ -342,19 +352,26 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                 color = x_material.face_color
                 material.specular_intensity = x_material.power
                 material.specular_color = x_material.specular_color
-                principled.inputs['Base Color'].default_value = color
-                principled.inputs['Alpha'].default_value = x_material.face_color[3]
+                principled.inputs["Base Color"].default_value = color
+                principled.inputs["Alpha"].default_value = x_material.face_color[3]
             material.diffuse_color = color
 
             # 鏡面反射 / Specular reflection
-            principled.inputs['Specular IOR Level'].default_value = x_material.power
-            principled.inputs['Specular Tint'].default_value = (*x_material.specular_color, 1.0)
+            principled.inputs["Specular IOR Level"].default_value = x_material.power
+            principled.inputs["Specular Tint"].default_value = (
+                *x_material.specular_color,
+                1.0,
+            )
             # 放射を設定 / Set emission
-            principled.inputs['Emission Color'].default_value = x_material.emission_color + (1.0,)
+            principled.inputs["Emission Color"].default_value = (
+                x_material.emission_color + (1.0,)
+            )
 
             # テクスチャの紐付け / Linking textures
             if x_material.texture_path and x_material.texture_path != "":
-                path = "/".join(bpy.path.abspath(self.filepath).split(os.path.sep)[0:-1])
+                path = "/".join(
+                    bpy.path.abspath(self.filepath).split(os.path.sep)[0:-1]
+                )
                 path = path + "/" + x_material.texture_path
                 if os.path.exists(path):
                     x_material.texture_path = path
@@ -366,20 +383,26 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
 
                 # 画像を読み込み / Load image
                 texture.image = bpy.data.images.load(filepath=x_material.texture_path)
-                texture.image.colorspace_settings.name = 'sRGB'
+                texture.image.colorspace_settings.name = "sRGB"
                 # ベースカラーとテクスチャのカラーをリンクさせる / Link the base color and the texture color
-                material.node_tree.links.new(principled.inputs['Base Color'], texture.outputs['Color'])
+                material.node_tree.links.new(
+                    principled.inputs["Base Color"], texture.outputs["Color"]
+                )
                 # アルファとテクスチャのアルファをリンクさせる / Link the alpha and the texture alpha
-                material.node_tree.links.new(principled.inputs['Alpha'], texture.outputs['Alpha'])
+                material.node_tree.links.new(
+                    principled.inputs["Alpha"], texture.outputs["Alpha"]
+                )
             elif self.gamma_correction:
                 # ガンマノードを作成 / Create gamma node
                 gamma_node = material.node_tree.nodes.new("ShaderNodeGamma")
                 gamma_node.location = (-250, 250)
 
-                gamma_node.inputs['Color'].default_value = color
-                gamma_node.inputs['Gamma'].default_value = 2.2
+                gamma_node.inputs["Color"].default_value = color
+                gamma_node.inputs["Gamma"].default_value = 2.2
                 # ベースカラーとガンマのカラーをリンクさせる / Link the base color and the gamma color
-                material.node_tree.links.new(principled.inputs['Base Color'], gamma_node.outputs['Color'])
+                material.node_tree.links.new(
+                    principled.inputs["Base Color"], gamma_node.outputs["Color"]
+                )
 
             # 頂点データと面データを作成 / Create vertex data and face data
             # マテリアルが使う頂点だけを抽出、その頂点のインデックスに合わせて面の頂点のインデックスを変更 /
@@ -433,7 +456,11 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         object_name = self.get_object_name_text()
         vertex_size = self.get_next_int_text()
         for _ in range(vertex_size):
-            vertex = [self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text()]
+            vertex = [
+                self.get_next_float_text(),
+                self.get_next_float_text(),
+                self.get_next_float_text(),
+            ]
             mesh.vertices.append(vertex)
         faces_size = self.get_next_int_text()
         for i in range(faces_size):
@@ -442,9 +469,9 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
             for _ in range(vertex_size):
                 indexes.append(self.get_next_int_text())
             mesh.faces.append(indexes)
-        
+
         brace_count = self.text_brace_count
-        
+
         token = self.get_next_token_text()
         while token != None and self.text_brace_count >= brace_count:
             if brace_count == self.text_brace_count:
@@ -467,7 +494,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         face_count = self.get_next_int_text()
         for _ in range(face_count):
             mesh.material_face_indexes.append(self.get_next_int_text())
-        
+
         brace_count = self.text_brace_count
         token = self.get_next_token_text()
         while token != None and self.text_brace_count >= brace_count:
@@ -478,11 +505,24 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
 
     def parse_material_text(self, mesh: XModelMesh):
         object_name = self.get_object_name_text()
-        color = (self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text())
+        color = (
+            self.get_next_float_text(),
+            self.get_next_float_text(),
+            self.get_next_float_text(),
+            self.get_next_float_text(),
+        )
         power = self.get_next_float_text()
-        specular_color = (self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text())
+        specular_color = (
+            self.get_next_float_text(),
+            self.get_next_float_text(),
+            self.get_next_float_text(),
+        )
         self.skip_next_token_text(";")
-        emissive_color = (self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text())
+        emissive_color = (
+            self.get_next_float_text(),
+            self.get_next_float_text(),
+            self.get_next_float_text(),
+        )
         material = XMaterial()
         material.face_color = color
         material.power = power
@@ -499,7 +539,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                     self.skip_next_token_text(";")
             token = self.get_next_token_text()
         mesh.materials.append(material)
-    
+
     def parse_frame_text(self, node: XModelNode):
         child = XModelNode()
         child.node_name = self.get_object_name_text()
@@ -511,10 +551,30 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                 if token == "FrameTransformMatrix":
                     self.skip_until_text("{")
                     matrix = [
-                        [self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text()],
-                        [self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text()],
-                        [self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text()],
-                        [self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text(), self.get_next_float_text()]
+                        [
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                        ],
+                        [
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                        ],
+                        [
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                        ],
+                        [
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                            self.get_next_float_text(),
+                        ],
                     ]
                     child.transform_matrix = mathutils.Matrix(matrix)
                     self.skip_until_text("}")
@@ -526,22 +586,37 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                     node.children.append(c)
             token = self.get_next_token_text()
         node.children.append(child)
-    
+
     def get_next_token_text(self):
         start = False
         ret = ""
         while self.text_pos < len(self.text_content):
             # comment
-            if len(self.text_content) + 1 < self.text_pos and self.text_content[self.text_pos] == '/' and self.text_content[len(self.text_content) + 1] == '/' or \
-                    self.text_content[self.text_pos] == '#':
+            if (
+                len(self.text_content) + 1 < self.text_pos
+                and self.text_content[self.text_pos] == "/"
+                and self.text_content[len(self.text_content) + 1] == "/"
+                or self.text_content[self.text_pos] == "#"
+            ):
                 while self.text_pos < len(self.text_content):
-                    if self.text_content[self.text_pos] == '\n' or self.text_content[self.text_pos] == '\r':
+                    if (
+                        self.text_content[self.text_pos] == "\n"
+                        or self.text_content[self.text_pos] == "\r"
+                    ):
                         break
                     self.text_pos += 1
             if self.is_ascii(self.text_content[self.text_pos]):
                 start = True
                 c = self.text_content[self.text_pos]
-                if c == "{" or c == "}" or c == "[" or c == "]" or  c == ";" or c == "," or c == '"':
+                if (
+                    c == "{"
+                    or c == "}"
+                    or c == "["
+                    or c == "]"
+                    or c == ";"
+                    or c == ","
+                    or c == '"'
+                ):
                     if len(ret) == 0:
                         if c == "{":
                             self.text_brace_count += 1
@@ -555,10 +630,10 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                 break
 
             self.text_pos += 1
-        
+
         if len(ret) == 0:
             return None
-        
+
         return ret
 
     def skip_until_text(self, target):
@@ -567,37 +642,37 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
             token = self.get_next_token_text()
             if token == target:
                 break
-    
+
     def skip_next_token_text(self, expected):
         token = self.get_next_token_text()
         if token != expected:
             raise Exception(f"Unexpected token: {token}")
-        
+
     def get_next_int_text(self):
         token = self.get_next_token_text()
         while token == ";" or token == ",":
             token = self.get_next_token_text()
-        
+
         if token == None:
             raise Exception("Unexpected end of file")
-        
+
         return int(token)
-        
+
     def get_next_float_text(self):
         token = self.get_next_token_text()
         while token == ";" or token == ",":
             token = self.get_next_token_text()
-        
+
         if token == None:
             raise Exception("Unexpected end of file")
-        
+
         return float(token)
 
     def get_next_string_text(self):
         self.skip_until_text('"')
         ret = ""
         while self.text_pos < len(self.text_content):
-            if self.text_content[self.text_pos] == '\\':
+            if self.text_content[self.text_pos] == "\\":
                 self.text_pos += 1
             elif self.text_content[self.text_pos] == '"':
                 self.text_pos += 1
@@ -617,7 +692,13 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         return token
 
     def is_ascii(self, c):
-        return ord(c) <= 255 and ord(c) != ord(' ') and ord(c) != ord('\r') and ord(c) != ord('\n') and ord(c) != ord('\t')
+        return (
+            ord(c) <= 255
+            and ord(c) != ord(" ")
+            and ord(c) != ord("\r")
+            and ord(c) != ord("\n")
+            and ord(c) != ord("\t")
+        )
 
     def parse_token(self):
         token = self.byte_buffer.get_short()
@@ -683,7 +764,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         i = 0
         vertex_index = 0
         while vertex_index < self.ret_integer_list[0]:
-            vertex = self.ret_float_list[i:i + 3]
+            vertex = self.ret_float_list[i : i + 3]
             mesh.vertices.append(vertex)
             vertex_index += 1
             i += 3
@@ -692,10 +773,10 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         i = 1
         while i < len(self.ret_integer_list):
             length = self.ret_integer_list[i]
-            indexes = self.ret_integer_list[i + 1:i + 1 + length]
+            indexes = self.ret_integer_list[i + 1 : i + 1 + length]
             mesh.faces.append(indexes)
             i += length + 1
-        
+
         brace_count = self.bin_brace_count
         token = self.parse_token()
         while brace_count <= self.bin_brace_count:
@@ -718,7 +799,9 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
     def parse_mesh_material_list_bin(self, mesh: XModelMesh):
         self.parse_token_loop(TOKEN_INTEGER_LIST)
         mesh.material_count = self.ret_integer_list[0]
-        mesh.material_face_indexes = self.ret_integer_list[2:self.ret_integer_list[1] + 2]
+        mesh.material_face_indexes = self.ret_integer_list[
+            2 : self.ret_integer_list[1] + 2
+        ]
         pos = self.byte_buffer.pos
         while True:
             token = self.parse_token()
@@ -737,10 +820,23 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         self.parse_token_loop(TOKEN_FLOAT_LIST)
         material = XMaterial()
         material.name = material_name
-        material.face_color = (self.ret_float_list[0], self.ret_float_list[1], self.ret_float_list[2], self.ret_float_list[3])
+        material.face_color = (
+            self.ret_float_list[0],
+            self.ret_float_list[1],
+            self.ret_float_list[2],
+            self.ret_float_list[3],
+        )
         material.power = self.ret_float_list[4]
-        material.specular_color = (self.ret_float_list[5], self.ret_float_list[6], self.ret_float_list[7])
-        material.emission_color = (self.ret_float_list[8], self.ret_float_list[9], self.ret_float_list[10])
+        material.specular_color = (
+            self.ret_float_list[5],
+            self.ret_float_list[6],
+            self.ret_float_list[7],
+        )
+        material.emission_color = (
+            self.ret_float_list[8],
+            self.ret_float_list[9],
+            self.ret_float_list[10],
+        )
         token = self.parse_token()
         if token == TOKEN_NAME and self.ret_string == "TextureFilename":
             self.parse_token_loop(TOKEN_STRING)
@@ -749,7 +845,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         if token != TOKEN_CBRACE:
             self.parse_token_loop(TOKEN_CBRACE)
         mesh.materials.append(material)
-    
+
     def parse_frame_bin(self, node: XModelNode):
         child = XModelNode()
         token = self.parse_token()
@@ -759,14 +855,14 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         child.node_name = name
         brace_count = self.bin_brace_count
         token = self.parse_token()
-        while brace_count<= self.bin_brace_count:
+        while brace_count <= self.bin_brace_count:
             if brace_count == self.bin_brace_count and token == TOKEN_NAME:
                 if self.ret_string == "FrameTransformMatrix":
                     matrix = [
                         self.ret_float_list[0:4],
                         self.ret_float_list[4:8],
                         self.ret_float_list[8:12],
-                        self.ret_float_list[12:16]
+                        self.ret_float_list[12:16],
                     ]
                     child.transform_matrix = mathutils.Matrix(matrix)
                 elif self.ret_string == "Mesh":
@@ -781,7 +877,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         # すべてのオブジェクトとマテリアルを削除 / Delete all objects and materials
         if self.remove_all:
             for obj in bpy.context.scene.objects:
-                if obj.type == 'MESH':
+                if obj.type == "MESH":
                     bpy.data.objects.remove(obj)
             for material in bpy.data.materials:
                 material.user_clear()
@@ -791,19 +887,21 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         # xファイルを読み込み / Load x file
         with open(self.filepath, "rb") as f:
             header = f.read(16)
-            if header[0:4] == b'xof ':
+            if header[0:4] == b"xof ":
                 # フォーマットのチェック
                 self.is_compressed = False
-                if header[8:12] == b'txt ':
+                if header[8:12] == b"txt ":
                     self.is_binary = False
-                elif header[8:12] == b'bin ':
+                elif header[8:12] == b"bin ":
                     self.is_binary = True
-                elif header[8:12] == b'bzip':
+                elif header[8:12] == b"bzip":
                     self.is_binary = True
                     self.is_compressed = True
                 self.float_size = int(header[12:16].decode())
             else:
-                raise Exception(bpy.app.translations.pgettext("This file is not X file!"))
+                raise Exception(
+                    bpy.app.translations.pgettext("This file is not X file!")
+                )
 
         if self.is_binary:
             # バイナリ / Binary
@@ -815,7 +913,7 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                     raw_data = f.read()
                     compressed_byte_buffer = utility.ByteBuffer(raw_data)
                     MSZIP_BLOCK = 0x8000
-                    MSZIP_MAGIC = int.from_bytes("CK".encode(), byteorder='little')
+                    MSZIP_MAGIC = int.from_bytes("CK".encode(), byteorder="little")
 
                     unzipped_size = compressed_byte_buffer.get_int()
 
@@ -825,11 +923,23 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                         block_size = compressed_byte_buffer.get_short()
                         magic = compressed_byte_buffer.get_short()
                         if block_size > MSZIP_BLOCK:
-                            raise Exception(bpy.app.translations.pgettext("Unexpected compressed block size!"))
+                            raise Exception(
+                                bpy.app.translations.pgettext(
+                                    "Unexpected compressed block size!"
+                                )
+                            )
                         if magic != MSZIP_MAGIC:
-                            raise Exception(bpy.app.translations.pgettext("Unexpected compressed block magic!"))
-                        compressed_data = compressed_byte_buffer.get_length(block_size - 2)
-                        self.byte_buffer.append(zlib.decompress(compressed_data, -8, MSZIP_BLOCK))
+                            raise Exception(
+                                bpy.app.translations.pgettext(
+                                    "Unexpected compressed block magic!"
+                                )
+                            )
+                        compressed_data = compressed_byte_buffer.get_length(
+                            block_size - 2
+                        )
+                        self.byte_buffer.append(
+                            zlib.decompress(compressed_data, -8, MSZIP_BLOCK)
+                        )
             else:
                 with open(self.filepath, "rb") as f:
                     f.read(16)
@@ -859,27 +969,25 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
 
         self.create_obj_from_node(mathutils.Matrix.Identity(4), root_node)
 
-        return {'FINISHED'}
+        return {"FINISHED"}
+
 
 # Xファイルに出力 / Export to X file
 class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
     bl_idname = "export.directx_x_for_bve"
-    bl_description = 'Export to X file (.x)'
+    bl_description = "Export to X file (.x)"
     bl_label = "Export DirectX X File"
-    bl_space_type = 'PROPERTIES'
-    bl_region_type = 'WINDOW'
-    bl_options = {'UNDO'}
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_options = {"UNDO"}
 
-    filepath: StringProperty(
-        name="export file",
-        subtype='FILE_PATH'
-    )
+    filepath: StringProperty(name="export file", subtype="FILE_PATH")
 
     filename_ext = ".x"
 
     filter_glob: StringProperty(
         default="*.x",
-        options={'HIDDEN'},
+        options={"HIDDEN"},
     )
 
     scale: FloatProperty(
@@ -893,7 +1001,7 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
             ("binary", "Binary", "Binary mode"),
             ("binary_zip", "Binary + Compress", "Compressed binary mode"),
         ],
-        name="Output mode"
+        name="Output mode",
     )
 
     export_material_name: BoolProperty(
@@ -927,11 +1035,16 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
 
     def execute(self, context):
         if not self.filepath.endswith(".x"):
-            return {'CANCELLED'}
+            return {"CANCELLED"}
 
         # ModelDataUtilityでBlenderのデータを整形 / Format Blender data with ModelDataUtility
         model_data_utility = ModelDataUtility()
-        model_data_utility.execute(context, export_selected_only=self.export_selected_only, scale=self.scale, gamma_correction=self.gamma_correction)
+        model_data_utility.execute(
+            context,
+            export_selected_only=self.export_selected_only,
+            scale=self.scale,
+            gamma_correction=self.gamma_correction,
+        )
         vertexes = model_data_utility.vertexes
         normals = model_data_utility.normals
         vertex_use_normal = model_data_utility.vertex_use_normal
@@ -947,14 +1060,14 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
             is_binary = True
 
         if is_binary:
-            with open(self.filepath, mode='wb') as f:
+            with open(self.filepath, mode="wb") as f:
                 # テンプレート
                 if self.mode == "binary_zip":
-                    f.write(b'xof 0302bzip0032')
+                    f.write(b"xof 0302bzip0032")
                     uncompressed_buffer = utility.ByteBuffer(bytes())
                     target = uncompressed_buffer
                 else:
-                    f.write(b'xof 0302bin 0032')
+                    f.write(b"xof 0302bin 0032")
                     target = f
                     uncompressed_buffer = None
                 if not self.export_minimum:
@@ -962,27 +1075,59 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
                     write_shorts(target, [TOKEN_TEMPLATE, TOKEN_NAME])
                     write_str(target, "Vector")
                     write_shorts(target, [TOKEN_OBRACE, TOKEN_GUID])
-                    write_guid(target, 0x3D82AB5E, 0x62DA, 0x11CF, b'\xAB\x39\x00\x20\xAF\x71\xE4\x33')
+                    write_guid(
+                        target,
+                        0x3D82AB5E,
+                        0x62DA,
+                        0x11CF,
+                        b"\xab\x39\x00\x20\xaf\x71\xe4\x33",
+                    )
                     write_shorts(target, [TOKEN_FLOAT, TOKEN_NAME])
                     write_str(target, "x")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_FLOAT, TOKEN_NAME])
                     write_str(target, "y")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_FLOAT, TOKEN_NAME])
                     write_str(target, "z")
-                    write_shorts(target, [TOKEN_SEMICOLON, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [TOKEN_SEMICOLON, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME],
+                    )
                     write_str(target, "MeshFace")
                     write_shorts(target, [TOKEN_OBRACE, TOKEN_GUID])
-                    write_guid(target, 0x3D82AB5F, 0x62DA, 0x11CF, b'\xAB\x39\x00\x20\xAF\x71\xE4\x33')
+                    write_guid(
+                        target,
+                        0x3D82AB5F,
+                        0x62DA,
+                        0x11CF,
+                        b"\xab\x39\x00\x20\xaf\x71\xe4\x33",
+                    )
                     write_shorts(target, [TOKEN_DWORD, TOKEN_NAME])
                     write_str(target, "nFaceVertexIndices")
-                    write_shorts(target, [TOKEN_SEMICOLON, TOKEN_ARRAY, TOKEN_DWORD, TOKEN_NAME])
+                    write_shorts(
+                        target, [TOKEN_SEMICOLON, TOKEN_ARRAY, TOKEN_DWORD, TOKEN_NAME]
+                    )
                     write_str(target, "faceVertexIndices")
                     write_shorts(target, [TOKEN_OBRACKET, TOKEN_NAME])
                     write_str(target, "nFaceVertexIndices")
-                    write_shorts(target, [TOKEN_CBRACKET, TOKEN_SEMICOLON, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [
+                            TOKEN_CBRACKET,
+                            TOKEN_SEMICOLON,
+                            TOKEN_CBRACE,
+                            TOKEN_TEMPLATE,
+                            TOKEN_NAME,
+                        ],
+                    )
                     write_str(target, "Mesh")
                     write_shorts(target, [TOKEN_OBRACE, TOKEN_GUID])
-                    write_guid(target, 0x3D82AB44, 0x62DA, 0x11CF, b'\xAB\x39\x00\x20\xAF\x71\xE4\x33')
+                    write_guid(
+                        target,
+                        0x3D82AB44,
+                        0x62DA,
+                        0x11CF,
+                        b"\xab\x39\x00\x20\xaf\x71\xe4\x33",
+                    )
                     write_shorts(target, [TOKEN_DWORD, TOKEN_NAME])
                     write_str(target, "nVertices")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_ARRAY, TOKEN_NAME])
@@ -991,7 +1136,10 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
                     write_str(target, "vertices")
                     write_shorts(target, [TOKEN_OBRACKET, TOKEN_NAME])
                     write_str(target, "nVertices")
-                    write_shorts(target, [TOKEN_CBRACKET, TOKEN_SEMICOLON, TOKEN_DWORD, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [TOKEN_CBRACKET, TOKEN_SEMICOLON, TOKEN_DWORD, TOKEN_NAME],
+                    )
                     write_str(target, "nFaces")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_ARRAY, TOKEN_NAME])
                     write_str(target, "MeshFace")
@@ -999,11 +1147,30 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
                     write_str(target, "faces")
                     write_shorts(target, [TOKEN_OBRACKET, TOKEN_NAME])
                     write_str(target, "nFaces")
-                    write_shorts(target, [TOKEN_CBRACKET, TOKEN_SEMICOLON, TOKEN_OBRACKET, TOKEN_DOT, TOKEN_DOT, TOKEN_DOT,
-                                    TOKEN_CBRACKET, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [
+                            TOKEN_CBRACKET,
+                            TOKEN_SEMICOLON,
+                            TOKEN_OBRACKET,
+                            TOKEN_DOT,
+                            TOKEN_DOT,
+                            TOKEN_DOT,
+                            TOKEN_CBRACKET,
+                            TOKEN_CBRACE,
+                            TOKEN_TEMPLATE,
+                            TOKEN_NAME,
+                        ],
+                    )
                     write_str(target, "MeshNormals")
                     write_shorts(target, [TOKEN_OBRACE, TOKEN_GUID])
-                    write_guid(target, 0xF6F23F43, 0x7686, 0x11CF, b'\x8F\x52\x00\x40\x33\x35\x94\xA3')
+                    write_guid(
+                        target,
+                        0xF6F23F43,
+                        0x7686,
+                        0x11CF,
+                        b"\x8f\x52\x00\x40\x33\x35\x94\xa3",
+                    )
                     write_shorts(target, [TOKEN_DWORD, TOKEN_NAME])
                     write_str(target, "nNormals")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_ARRAY, TOKEN_NAME])
@@ -1012,7 +1179,10 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
                     write_str(target, "normals")
                     write_shorts(target, [TOKEN_OBRACKET, TOKEN_NAME])
                     write_str(target, "nNormals")
-                    write_shorts(target, [TOKEN_CBRACKET, TOKEN_SEMICOLON, TOKEN_DWORD, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [TOKEN_CBRACKET, TOKEN_SEMICOLON, TOKEN_DWORD, TOKEN_NAME],
+                    )
                     write_str(target, "nFaceNormals")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_ARRAY, TOKEN_NAME])
                     write_str(target, "MeshFace")
@@ -1020,18 +1190,42 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
                     write_str(target, "faceNormals")
                     write_shorts(target, [TOKEN_OBRACKET, TOKEN_NAME])
                     write_str(target, "nFaceNormals")
-                    write_shorts(target, [TOKEN_CBRACKET, TOKEN_SEMICOLON, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [
+                            TOKEN_CBRACKET,
+                            TOKEN_SEMICOLON,
+                            TOKEN_CBRACE,
+                            TOKEN_TEMPLATE,
+                            TOKEN_NAME,
+                        ],
+                    )
                     write_str(target, "Coords2d")
                     write_shorts(target, [TOKEN_OBRACE, TOKEN_GUID])
-                    write_guid(target, 0xF6F23F44, 0x7686, 0x11CF, b'\x8F\x52\x00\x40\x33\x35\x94\xA3')
+                    write_guid(
+                        target,
+                        0xF6F23F44,
+                        0x7686,
+                        0x11CF,
+                        b"\x8f\x52\x00\x40\x33\x35\x94\xa3",
+                    )
                     write_shorts(target, [TOKEN_FLOAT, TOKEN_NAME])
                     write_str(target, "u")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_FLOAT, TOKEN_NAME])
                     write_str(target, "v")
-                    write_shorts(target, [TOKEN_SEMICOLON, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [TOKEN_SEMICOLON, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME],
+                    )
                     write_str(target, "MeshTextureCoords")
                     write_shorts(target, [TOKEN_OBRACE, TOKEN_GUID])
-                    write_guid(target, 0xF6F23F40, 0x7686, 0x11CF, b'\x8F\x52\x00\x40\x33\x35\x94\xA3')
+                    write_guid(
+                        target,
+                        0xF6F23F40,
+                        0x7686,
+                        0x11CF,
+                        b"\x8f\x52\x00\x40\x33\x35\x94\xa3",
+                    )
                     write_shorts(target, [TOKEN_DWORD, TOKEN_NAME])
                     write_str(target, "nTextureCoords")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_ARRAY, TOKEN_NAME])
@@ -1040,10 +1234,25 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
                     write_str(target, "textureCoords")
                     write_shorts(target, [TOKEN_OBRACKET, TOKEN_NAME])
                     write_str(target, "nTextureCoords")
-                    write_shorts(target, [TOKEN_CBRACKET, TOKEN_SEMICOLON, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [
+                            TOKEN_CBRACKET,
+                            TOKEN_SEMICOLON,
+                            TOKEN_CBRACE,
+                            TOKEN_TEMPLATE,
+                            TOKEN_NAME,
+                        ],
+                    )
                     write_str(target, "ColorRGBA")
                     write_shorts(target, [TOKEN_OBRACE, TOKEN_GUID])
-                    write_guid(target, 0x35FF44E0, 0x6C7C, 0x11CF, b'\x8F\x52\x00\x40\x33\x35\x94\xA3')
+                    write_guid(
+                        target,
+                        0x35FF44E0,
+                        0x6C7C,
+                        0x11CF,
+                        b"\x8f\x52\x00\x40\x33\x35\x94\xa3",
+                    )
                     write_shorts(target, [TOKEN_FLOAT, TOKEN_NAME])
                     write_str(target, "red")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_FLOAT, TOKEN_NAME])
@@ -1052,20 +1261,38 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
                     write_str(target, "blue")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_FLOAT, TOKEN_NAME])
                     write_str(target, "alpha")
-                    write_shorts(target, [TOKEN_SEMICOLON, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [TOKEN_SEMICOLON, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME],
+                    )
                     write_str(target, "ColorRGB")
                     write_shorts(target, [TOKEN_OBRACE, TOKEN_GUID])
-                    write_guid(target, 0xD3E16E81, 0x7835, 0x11CF, b'\x8F\x52\x00\x40\x33\x35\x94\xA3')
+                    write_guid(
+                        target,
+                        0xD3E16E81,
+                        0x7835,
+                        0x11CF,
+                        b"\x8f\x52\x00\x40\x33\x35\x94\xa3",
+                    )
                     write_shorts(target, [TOKEN_FLOAT, TOKEN_NAME])
                     write_str(target, "red")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_FLOAT, TOKEN_NAME])
                     write_str(target, "green")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_FLOAT, TOKEN_NAME])
                     write_str(target, "blue")
-                    write_shorts(target, [TOKEN_SEMICOLON, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [TOKEN_SEMICOLON, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME],
+                    )
                     write_str(target, "Material")
                     write_shorts(target, [TOKEN_OBRACE, TOKEN_GUID])
-                    write_guid(target, 0x3D82AB4D, 0x62DA, 0x11CF, b'\xAB\x39\x00\x20\xAF\x71\xE4\x33')
+                    write_guid(
+                        target,
+                        0x3D82AB4D,
+                        0x62DA,
+                        0x11CF,
+                        b"\xab\x39\x00\x20\xaf\x71\xe4\x33",
+                    )
                     write_shorts(target, [TOKEN_NAME])
                     write_str(target, "ColorRGBA")
                     write_shorts(target, [TOKEN_NAME])
@@ -1080,27 +1307,65 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
                     write_str(target, "ColorRGB")
                     write_shorts(target, [TOKEN_NAME])
                     write_str(target, "emissiveColor")
-                    write_shorts(target, [TOKEN_SEMICOLON, TOKEN_OBRACKET, TOKEN_DOT, TOKEN_DOT, TOKEN_DOT,
-                                    TOKEN_CBRACKET, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [
+                            TOKEN_SEMICOLON,
+                            TOKEN_OBRACKET,
+                            TOKEN_DOT,
+                            TOKEN_DOT,
+                            TOKEN_DOT,
+                            TOKEN_CBRACKET,
+                            TOKEN_CBRACE,
+                            TOKEN_TEMPLATE,
+                            TOKEN_NAME,
+                        ],
+                    )
                     write_str(target, "MeshMaterialList")
                     write_shorts(target, [TOKEN_OBRACE, TOKEN_GUID])
-                    write_guid(target, 0xF6F23F42, 0x7686, 0x11CF, b'\x8F\x52\x00\x40\x33\x35\x94\xA3')
+                    write_guid(
+                        target,
+                        0xF6F23F42,
+                        0x7686,
+                        0x11CF,
+                        b"\x8f\x52\x00\x40\x33\x35\x94\xa3",
+                    )
                     write_shorts(target, [TOKEN_DWORD, TOKEN_NAME])
                     write_str(target, "nMaterials")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_DWORD, TOKEN_NAME])
                     write_str(target, "nFaceIndexes")
-                    write_shorts(target, [TOKEN_SEMICOLON, TOKEN_ARRAY, TOKEN_DWORD, TOKEN_NAME])
+                    write_shorts(
+                        target, [TOKEN_SEMICOLON, TOKEN_ARRAY, TOKEN_DWORD, TOKEN_NAME]
+                    )
                     write_str(target, "faceIndexes")
                     write_shorts(target, [TOKEN_OBRACKET, TOKEN_NAME])
                     write_str(target, "nFaceIndexes")
-                    write_shorts(target, [TOKEN_CBRACKET, TOKEN_SEMICOLON, TOKEN_OBRACKET, TOKEN_NAME])
+                    write_shorts(
+                        target,
+                        [TOKEN_CBRACKET, TOKEN_SEMICOLON, TOKEN_OBRACKET, TOKEN_NAME],
+                    )
                     write_str(target, "Material")
                     write_shorts(target, [TOKEN_GUID])
-                    write_guid(target, 0x3D82AB4D, 0x62DA, 0x11CF, b'\xAB\x39\x00\x20\xAF\x71\xE4\x33')
-                    write_shorts(target, [TOKEN_CBRACKET, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME])
+                    write_guid(
+                        target,
+                        0x3D82AB4D,
+                        0x62DA,
+                        0x11CF,
+                        b"\xab\x39\x00\x20\xaf\x71\xe4\x33",
+                    )
+                    write_shorts(
+                        target,
+                        [TOKEN_CBRACKET, TOKEN_CBRACE, TOKEN_TEMPLATE, TOKEN_NAME],
+                    )
                     write_str(target, "TextureFilename")
                     write_shorts(target, [TOKEN_OBRACE, TOKEN_GUID])
-                    write_guid(target, 0xA42790E1, 0x7810, 0x11CF, b'\x8F\x52\x00\x40\x33\x35\x94\xA3')
+                    write_guid(
+                        target,
+                        0xA42790E1,
+                        0x7810,
+                        0x11CF,
+                        b"\x8f\x52\x00\x40\x33\x35\x94\xa3",
+                    )
                     write_shorts(target, [TOKEN_LPSTR, TOKEN_NAME])
                     write_str(target, "filename")
                     write_shorts(target, [TOKEN_SEMICOLON, TOKEN_CBRACE])
@@ -1150,7 +1415,7 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
                 write_str(target, "MeshMaterialList")
                 write_shorts(target, [TOKEN_OBRACE])
                 index_list = [len(x_materials), len(faces_use_material)]
-                index_list[2:len(faces_use_material) + 2] = faces_use_material
+                index_list[2 : len(faces_use_material) + 2] = faces_use_material
                 write_integer_list(target, index_list)
                 for x_material in x_materials:
                     write_shorts(target, [TOKEN_NAME])
@@ -1183,17 +1448,19 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
                     MSZIP_BLOCK = 0x8000
                     while uncompressed_buffer.has_remaining():
                         length = min(uncompressed_buffer.remaining(), MSZIP_BLOCK)
-                        compressed_data = zlib.compress(uncompressed_buffer.get_length(length))[2:]
+                        compressed_data = zlib.compress(
+                            uncompressed_buffer.get_length(length)
+                        )[2:]
                         f.write(struct.pack("<H", length))
                         f.write(struct.pack("<H", len(compressed_data) + 2))
                         f.write("CK".encode())
                         f.write(compressed_data)
         else:
-            x_file_content = 'xof 0302txt 0032\n'
+            x_file_content = "xof 0302txt 0032\n"
 
             if not self.export_minimum:
                 # テンプレートデータを書き出す / Write template data
-                x_file_content += '''
+                x_file_content += """
 template Vector {
  <3d82ab5e-62da-11cf-ab39-0020af71e433>
  FLOAT x;
@@ -1273,7 +1540,7 @@ template TextureFilename {
  STRING filename;
 }
 
-'''
+"""
 
             x_file_content += "Mesh {\n"
             x_file_content += " " + str(len(vertexes)) + ";\n"
@@ -1286,7 +1553,13 @@ template TextureFilename {
             # 面データ / Face data
             x_file_content += " " + str(len(faces)) + ";\n"
             for face in faces:
-                x_file_content += " " + str(len(face)) + ";" + str(face).replace(" ", "")[1:-1] + ";,\n"
+                x_file_content += (
+                    " "
+                    + str(len(face))
+                    + ";"
+                    + str(face).replace(" ", "")[1:-1]
+                    + ";,\n"
+                )
             x_file_content = x_file_content[0:-2] + ";\n\n"
 
             # マテリアルデータ / Material data
@@ -1302,26 +1575,42 @@ template TextureFilename {
                     x_file_content += "  Material " + x_material.name + " {\n"
                 else:
                     x_file_content += "  Material {\n"
-                x_file_content += "   " + \
-                                  float_to_str(x_material.face_color[0]) + ";" + \
-                                  float_to_str(x_material.face_color[1]) + ";" + \
-                                  float_to_str(x_material.face_color[2]) + ";" + \
-                                  float_to_str(x_material.face_color[3]) + ";;\n"
+                x_file_content += (
+                    "   "
+                    + float_to_str(x_material.face_color[0])
+                    + ";"
+                    + float_to_str(x_material.face_color[1])
+                    + ";"
+                    + float_to_str(x_material.face_color[2])
+                    + ";"
+                    + float_to_str(x_material.face_color[3])
+                    + ";;\n"
+                )
                 x_file_content += "   " + float_to_str(x_material.power) + ";\n"
-                x_file_content += "   " + \
-                                  float_to_str(x_material.specular_color[0]) + ";" + \
-                                  float_to_str(x_material.specular_color[1]) + ";" + \
-                                  float_to_str(x_material.specular_color[2]) + ";;\n"
+                x_file_content += (
+                    "   "
+                    + float_to_str(x_material.specular_color[0])
+                    + ";"
+                    + float_to_str(x_material.specular_color[1])
+                    + ";"
+                    + float_to_str(x_material.specular_color[2])
+                    + ";;\n"
+                )
                 emissive_color = x_material.emission_color
                 if self.use_emissive_power:
                     emissive_color = x_material.emission_color_calculated
-                x_file_content += "   " + \
-                                  float_to_str(emissive_color[0]) + ";" + \
-                                  float_to_str(emissive_color[1]) + ";" + \
-                                  float_to_str(emissive_color[2]) + ";;\n"
+                x_file_content += (
+                    "   "
+                    + float_to_str(emissive_color[0])
+                    + ";"
+                    + float_to_str(emissive_color[1])
+                    + ";"
+                    + float_to_str(emissive_color[2])
+                    + ";;\n"
+                )
                 if x_material.texture_path != "":
                     x_file_content += "\n   TextureFilename {\n"
-                    x_file_content += "    \"" + x_material.texture_path + "\";\n"
+                    x_file_content += '    "' + x_material.texture_path + '";\n'
                     x_file_content += "   }\n"
                 x_file_content += "  }\n\n"
             x_file_content = x_file_content[0:-1]
@@ -1335,7 +1624,13 @@ template TextureFilename {
             x_file_content = x_file_content[0:-2] + ";\n"
             x_file_content += "  " + str(len(vertex_use_normal)) + ";\n"
             for vertex in vertex_use_normal:
-                x_file_content += "  " + str(len(vertex)) + ";" + str(vertex).replace(" ", "")[1:-1] + ";,\n"
+                x_file_content += (
+                    "  "
+                    + str(len(vertex))
+                    + ";"
+                    + str(vertex).replace(" ", "")[1:-1]
+                    + ";,\n"
+                )
             x_file_content = x_file_content[0:-2] + ";\n"
             x_file_content += " }\n\n"
 
@@ -1343,12 +1638,18 @@ template TextureFilename {
             x_file_content += " MeshTextureCoords {\n"
             x_file_content += "  " + str(len(uv_data)) + ";\n"
             for vertex in uv_data:
-                x_file_content += "  " + float_to_str(vertex[0]) + ";" + float_to_str(-vertex[1] + 1) + ";,\n"
+                x_file_content += (
+                    "  "
+                    + float_to_str(vertex[0])
+                    + ";"
+                    + float_to_str(-vertex[1] + 1)
+                    + ";,\n"
+                )
             x_file_content = x_file_content[0:-2] + ";\n"
             x_file_content += " }\n"
             x_file_content += "}\n"
 
-            with open(self.filepath, mode='w') as f:
+            with open(self.filepath, mode="w") as f:
                 f.write(x_file_content)
 
-        return {'FINISHED'}
+        return {"FINISHED"}
