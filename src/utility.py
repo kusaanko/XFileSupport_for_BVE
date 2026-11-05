@@ -46,33 +46,77 @@ def float_to_str(f):
     return float_string
 
 
+class ByteBufferError(Exception):
+    pass
+
+
 # Java風ByteBuffer / Java-like ByteBuffer
 class ByteBuffer:
     def __init__(self, data):
         self.array = bytearray(data)
         self.pos = 0
 
+    def _check(self, n):
+        if self.pos + n > len(self.array):
+            raise ByteBufferError("Unexpected end of file")
+
     def get_next(self):
+        self._check(1)
         value = self.array[self.pos]
         self.pos += 1
         return value
 
     def get_length(self, length):
+        self._check(length)
         value = self.array[self.pos : self.pos + length]
         self.pos += length
         return value
 
     def get_int(self):
-        return int.from_bytes(self.get_length(4), byteorder="little")
+        self._check(4)
+        # struct.unpack_fromはスライスコピーが発生しない / No slice copy with struct.unpack_from
+        value = struct.unpack_from("<I", self.array, self.pos)[0]
+        self.pos += 4
+        return value
 
     def get_short(self):
-        return int.from_bytes(self.get_length(2), byteorder="little")
+        self._check(2)
+        value = struct.unpack_from("<H", self.array, self.pos)[0]
+        self.pos += 2
+        return value
 
     def get_float(self):
-        return struct.unpack("<f", self.get_length(4))[0]
+        self._check(4)
+        value = struct.unpack_from("<f", self.array, self.pos)[0]
+        self.pos += 4
+        return value
 
     def get_double(self):
-        return struct.unpack("<d", self.get_length(8))[0]
+        self._check(8)
+        value = struct.unpack_from("<d", self.array, self.pos)[0]
+        self.pos += 8
+        return value
+
+    def get_int_list(self, count):
+        if count < 0:
+            raise ByteBufferError("Invalid integer list length")
+        self._check(count * 4)
+        # 一括で読み込む / Read in bulk
+        values = struct.unpack_from("<%dI" % count, self.array, self.pos)
+        self.pos += count * 4
+        return values
+
+    def get_float_list(self, count, size):
+        if count < 0:
+            raise ByteBufferError("Invalid float list length")
+        self._check(count * size)
+        # 一括で読み込む / Read in bulk
+        if size == 8:
+            values = struct.unpack_from("<%dd" % count, self.array, self.pos)
+        else:
+            values = struct.unpack_from("<%df" % count, self.array, self.pos)
+        self.pos += count * size
+        return values
 
     def has_remaining(self):
         return len(self.array) > self.pos

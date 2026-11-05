@@ -1,6 +1,7 @@
 import re
 import mathutils
 import struct
+import time
 import zlib
 import os
 from typing import Self
@@ -44,6 +45,25 @@ TOKEN_LPSTR = 0x31
 TOKEN_UNICODE = 0x32
 TOKEN_CSTRING = 0x33
 TOKEN_ARRAY = 0x34
+
+# パフォーマンス用の定数 / Constants for tokenizing performance
+_ASCII_SKIP_CHARS = frozenset((" ", "\r", "\n", "\t"))
+_SPECIAL_CHARS = frozenset(("{", "}", "[", "]", ";", ",", '"'))
+
+# テキストXファイル用の高速トークナイザ / Fast tokenizer for text X files
+# コメント・空白・特殊文字・単語をC実装の正規表現エンジンでまとめて切り出す /
+#  Match comments, whitespace, special chars and words at once with the C regex engine
+_TOKEN_RE = re.compile(
+    r"#[^\r\n]*"  # コメント / comment
+    r"|[\s\u0100-\U0010ffff]+"  # 空白と非ASCII文字 / whitespace and non-ASCII chars
+    r"|[{}\[\];,\"]"  # 特殊文字 / special chars
+    r"|[^{}\[\];,\"\s\u0100-\U0010ffff]+"  # 単語 / word
+)
+
+# 数値の一括読み込み用 / For reading numbers in bulk
+# 数値と区切り文字が途切れる位置を探す / Find where numbers and separators end
+_RUN_END_RE = re.compile(r"[^0-9eE+\-.,;\s]")
+_NUMBER_TRANS = str.maketrans({";": " ", ",": " "})
 
 
 class XModelMesh:
@@ -95,6 +115,348 @@ class XMaterial:
     emission_color: tuple[float, float, float] = (0.0, 0.0, 0.0)
     texture_path: str | None = ""
     name: str | None = ""
+
+
+class TextXParser:
+    """テキストXファイルのパーサ / Parser for text X files.
+
+    bpy.types.Operator は属性アクセスが非常に遅いため、パース状態は
+    プレーンな Python オブジェクトで保持する /
+    Attribute access on bpy.types.Operator is very slow, so the parse state is
+    kept in a plain Python object.
+    """
+
+    def __init__(self, content: str):
+        self.content = content
+        self.pos = 0
+        self.brace_count = 0
+
+    def parse(self) -> XModelNode:
+        root_node = XModelNode()
+        token = self.get_next_token()
+        while token is not None:
+            if self.brace_count == 0:
+                if token == "template":
+                    # テンプレート本体は使わないので丸ごと飛ばす /
+                    #  The template body is unused, so skip it entirely
+                    brace_index = self.content.find("{", self.pos)
+                    if brace_index != -1:
+                        self.pos = brace_index
+                        self.skip_block()
+                elif token == "Mesh":
+                    self.parse_mesh(root_node.mesh)
+                elif token == "Material":
+                    self.parse_material(root_node.mesh)
+                elif token == "Frame":
+                    self.parse_frame(root_node)
+                elif self.skip_unknown_block(token):
+                    pass
+            token = self.get_next_token()
+        return root_node
+
+    def get_next_token(self):
+        # 正規表現でトークンを一括抽出する / Extract tokens in bulk with regex
+        content = self.content
+        length = len(content)
+        pos = self.pos
+        while pos < length:
+            match = _TOKEN_RE.match(content, pos)
+            if match is None:
+                self.pos = length
+                return None
+            token = match.group(0)
+            pos = match.end()
+            first = token[0]
+            # コメントと空白は読み飛ばす / Skip comments and whitespace
+            if first == "#" or first in _ASCII_SKIP_CHARS or ord(first) > 255:
+                continue
+            self.pos = pos
+            if first in _SPECIAL_CHARS:
+                if first == "{":
+                    self.brace_count += 1
+                elif first == "}":
+                    self.brace_count -= 1
+            return token
+        self.pos = pos
+        return None
+
+    def skip_until(self, target):
+        while self.get_next_token() != target:
+            pass
+
+    def skip_next_token(self, expected):
+        token = self.get_next_token()
+        if token != expected:
+            raise Exception(f"Unexpected token: {token}")
+
+    def get_next_int(self):
+        token = self.get_next_token()
+        while token == ";" or token == ",":
+            token = self.get_next_token()
+        if token is None:
+            raise Exception("Unexpected end of file")
+        return int(token)
+
+    def get_next_float(self):
+        token = self.get_next_token()
+        while token == ";" or token == ",":
+            token = self.get_next_token()
+        if token is None:
+            raise Exception("Unexpected end of file")
+        return float(token)
+
+    def next_is_open_brace(self):
+        # 次のトークンが '{' かどうかを空白だけ読み飛ばして判定する /
+        #  Check whether the next token is '{' while skipping only whitespace
+        content = self.content
+        length = len(content)
+        pos = self.pos
+        while pos < length and content[pos].isspace():
+            pos += 1
+        return pos < length and content[pos] == "{"
+
+    def skip_block(self):
+        # ブロックを波括弧の対応を数えながら一括で読み飛ばす /
+        #  Skip a block in bulk by counting matching braces
+        content = self.content
+        length = len(content)
+        open_index = content.find("{", self.pos)
+        if open_index == -1:
+            self.pos = length
+            return
+        depth = 0
+        index = open_index
+        while True:
+            open_index = content.find("{", index)
+            close_index = content.find("}", index)
+            if close_index == -1:
+                self.pos = length
+                return
+            if open_index != -1 and open_index < close_index:
+                depth += 1
+                index = open_index + 1
+            else:
+                depth -= 1
+                index = close_index + 1
+                if depth == 0:
+                    break
+        self.pos = index
+
+    def skip_unknown_block(self, token) -> bool:
+        # 認識しないブロックは中身を読まずに飛ばす / Skip unknown blocks without reading them
+        if token in _SPECIAL_CHARS:
+            return False
+        if self.next_is_open_brace():
+            self.skip_block()
+            return True
+        return False
+
+    def read_number_run(self):
+        # 数値と区切り文字だけが続く範囲を一括で読み取る /
+        #  Read a contiguous region of numbers and separators in bulk
+        content = self.content
+        match = _RUN_END_RE.search(content, self.pos)
+        if match is None:
+            end = len(content)
+        else:
+            end = match.start()
+        segment = content[self.pos : end]
+        self.pos = end
+        if not segment:
+            return []
+        return list(map(float, segment.translate(_NUMBER_TRANS).split()))
+
+    def get_next_string(self):
+        self.skip_until('"')
+        content = self.content
+        length = len(content)
+        pos = self.pos
+        start = pos
+        chunks = []
+        while pos < length:
+            char = content[pos]
+            if char == "\\":
+                pos += 2
+                continue
+            if char == '"':
+                chunks.append(content[start:pos])
+                pos += 1
+                break
+            pos += 1
+        self.pos = pos
+        ret = "".join(chunks)
+        if len(ret) == 0:
+            return None
+        return ret
+
+    def get_object_name(self):
+        token = self.get_next_token()
+        if token == "{":
+            return None
+        self.skip_next_token("{")
+        return token
+
+    def parse_mesh(self, mesh: XModelMesh):
+        self.get_object_name()
+        values = self.read_number_run()
+        if not values:
+            raise Exception("Unexpected end of file")
+        index = 0
+        vertex_size = int(values[index])
+        index += 1
+        vertex_end = index + vertex_size * 3
+        mesh.vertices.extend(
+            [values[i : i + 3] for i in range(index, vertex_end, 3)]
+        )
+        index = vertex_end
+        faces_size = int(values[index])
+        index += 1
+        for _ in range(faces_size):
+            length = int(values[index])
+            index += 1
+            mesh.faces.append([int(value) for value in values[index : index + length]])
+            index += length
+
+        brace_count = self.brace_count
+        token = self.get_next_token()
+        while token is not None and self.brace_count >= brace_count:
+            if brace_count == self.brace_count:
+                if token == "MeshMaterialList":
+                    self.parse_mesh_material_list(mesh)
+                elif token == "MeshTextureCoords":
+                    self.parse_mesh_texture_coords(mesh)
+                elif token == "MeshNormals":
+                    self.parse_mesh_normals(mesh)
+                elif self.skip_unknown_block(token):
+                    pass
+            token = self.get_next_token()
+
+    def parse_mesh_normals(self, mesh: XModelMesh):
+        self.get_object_name()
+        values = self.read_number_run()
+        if not values:
+            raise Exception("Unexpected end of file")
+        index = 0
+        normal_size = int(values[index])
+        index += 1
+        normal_end = index + normal_size * 3
+        mesh.normals.extend(
+            [values[i : i + 3] for i in range(index, normal_end, 3)]
+        )
+        index = normal_end
+        face_size = int(values[index])
+        index += 1
+        for _ in range(face_size):
+            normal_face_size = int(values[index])
+            index += 1
+            mesh.normal_faces.append(
+                [int(value) for value in values[index : index + normal_face_size]]
+            )
+            index += normal_face_size
+
+    def parse_mesh_texture_coords(self, mesh: XModelMesh):
+        self.get_object_name()
+        values = self.read_number_run()
+        if not values:
+            raise Exception("Unexpected end of file")
+        vertex_size = int(values[0])
+        index = 1
+        end = index + vertex_size * 2
+        mesh.tex_coords.extend(
+            [values[i : i + 2] for i in range(index, end, 2)]
+        )
+
+    def parse_mesh_material_list(self, mesh: XModelMesh):
+        self.get_object_name()
+        values = self.read_number_run()
+        if len(values) < 2:
+            raise Exception("Unexpected end of file")
+        mesh.material_count = int(values[0])
+        face_count = int(values[1])
+        mesh.material_face_indexes.extend(
+            int(value) for value in values[2 : 2 + face_count]
+        )
+
+        brace_count = self.brace_count
+        token = self.get_next_token()
+        while token is not None and self.brace_count >= brace_count:
+            if brace_count == self.brace_count:
+                if token == "Material":
+                    self.parse_material(mesh)
+                elif self.skip_unknown_block(token):
+                    pass
+            token = self.get_next_token()
+
+    def parse_material(self, mesh: XModelMesh):
+        object_name = self.get_object_name()
+        color = (
+            self.get_next_float(),
+            self.get_next_float(),
+            self.get_next_float(),
+            self.get_next_float(),
+        )
+        power = self.get_next_float()
+        specular_color = (
+            self.get_next_float(),
+            self.get_next_float(),
+            self.get_next_float(),
+        )
+        self.skip_next_token(";")
+        emissive_color = (
+            self.get_next_float(),
+            self.get_next_float(),
+            self.get_next_float(),
+        )
+        material = XMaterial()
+        material.face_color = color
+        material.power = power
+        material.specular_color = specular_color
+        material.emission_color = emissive_color
+        material.name = object_name
+
+        brace_count = self.brace_count
+        token = self.get_next_token()
+        while token is not None and self.brace_count >= brace_count:
+            if brace_count == self.brace_count:
+                if token == "TextureFilename":
+                    material.texture_path = self.get_next_string()
+                    self.skip_next_token(";")
+                elif self.skip_unknown_block(token):
+                    pass
+            token = self.get_next_token()
+        mesh.materials.append(material)
+
+    def parse_frame(self, node: XModelNode):
+        child = XModelNode()
+        child.node_name = self.get_object_name()
+
+        brace_count = self.brace_count
+        token = self.get_next_token()
+        while token is not None and self.brace_count >= brace_count:
+            if brace_count == self.brace_count:
+                if token == "FrameTransformMatrix":
+                    self.skip_until("{")
+                    matrix = [
+                        [
+                            self.get_next_float(),
+                            self.get_next_float(),
+                            self.get_next_float(),
+                            self.get_next_float(),
+                        ]
+                        for _ in range(4)
+                    ]
+                    child.transform_matrix = mathutils.Matrix(matrix)
+                    self.skip_until("}")
+                elif token == "Mesh":
+                    self.parse_mesh(child.mesh)
+                elif token == "Frame":
+                    c = XModelNode()
+                    self.parse_frame(c)
+                    node.children.append(c)
+                elif self.skip_unknown_block(token):
+                    pass
+            token = self.get_next_token()
+        node.children.append(child)
 
 
 def to_XElement(x_model_file_string, start_line_num):
@@ -157,8 +519,8 @@ def write_float(f, i):
 
 
 def write_shorts(f, shorts):
-    for s in shorts:
-        write_short(f, s)
+    # 一括で書き込む / Write in bulk
+    f.write(struct.pack("<%dH" % len(shorts), *shorts))
 
 
 def write_str(f, string):
@@ -175,15 +537,15 @@ def write_guid(f, data1, data2, data3, data4):
 def write_integer_list(f, i_list):
     write_short(f, TOKEN_INTEGER_LIST)
     write_int(f, len(i_list))
-    for i in i_list:
-        write_int(f, i)
+    # 一括で書き込む / Write in bulk
+    f.write(struct.pack("<%di" % len(i_list), *i_list))
 
 
 def write_float_list(f, f_list):
     write_short(f, TOKEN_FLOAT_LIST)
     write_int(f, len(f_list))
-    for i in f_list:
-        write_float(f, i)
+    # 一括で書き込む / Write in bulk
+    f.write(struct.pack("<%df" % len(f_list), *(float(i) for i in f_list)))
 
 
 class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
@@ -229,15 +591,17 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         self.ret_float_list = []
         self.ret_uuid = ""
         self.byte_buffer = utility.ByteBuffer(bytes())
-        self.text_content = ""
-        self.text_pos = 0
-        self.text_brace_count = 0
         self.bin_brace_count = 0
         self.object_index = 0
+        # 名前でマテリアルを参照できるようにする / Allow referencing materials by name
+        self.materials_by_name: dict[str, XMaterial] = {}
 
     def create_obj_from_node(self, matrix: mathutils.Matrix, node: XModelNode):
         if matrix is None:
             matrix = mathutils.Matrix.Identity(4)
+        # プロパティアクセスは高コストなのでローカルにキャッシュ /
+        #  Property access is expensive, so cache it locally
+        scale = self.scale
 
         for child in node.children:
             self.create_obj_from_node(matrix @ child.transform_matrix, child)
@@ -246,52 +610,56 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
 
         vertex_index = 0
         mesh_vertexes = []
-        mesh_vertexes_redirect = {}
+        # 辞書で重複判定を行いO(n^2)を回避 / Use a dict to avoid O(n^2) duplicate search
+        vertex_redirect_map = {}
+        # 元の頂点インデックス -> 統合後のインデックス / Original vertex index -> merged index
+        mesh_vertexes_redirect = []
+        redirect_append = mesh_vertexes_redirect.append
         for vertex in mesh.vertices:
             # DirectX X Y Z
             # Blender X Z Y
             vector = (
-                vertex[0] * self.scale,
-                vertex[2] * self.scale,
-                vertex[1] * self.scale,
+                vertex[0] * scale,
+                vertex[2] * scale,
+                vertex[1] * scale,
             )
             # 重複した座標は1つにまとめる / Combine duplicate coordinates into one
-            # リダイレクト先を登録しておく / Register the redirect destination
-            if vector in mesh_vertexes:
-                mesh_vertexes_redirect[vertex_index] = mesh_vertexes.index(vector)
-            else:
-                mesh_vertexes_redirect[vertex_index] = len(mesh_vertexes)
+            redirect = vertex_redirect_map.get(vector)
+            if redirect is None:
+                redirect = len(mesh_vertexes)
+                vertex_redirect_map[vector] = redirect
                 mesh_vertexes.append(vector)
-            vertex_index += 1
-            if vertex_index == len(mesh.vertices):
-                break
-        indexes_size = 0
+            redirect_append(redirect)
         mesh_faces = []
         mesh_faces_exact = []
+        mesh_normal_faces = []
         mesh_tex_coord = []
         mesh_material_face_indexes = []
         mesh_materials: list[XMaterial] = []
-        for indexes in mesh.faces:
+        has_normals = len(mesh.normals) > 0 and len(mesh.normal_faces) >= len(mesh.faces)
+        normal_sign = -1.0 if scale < 0 else 1.0
+        mesh_normals = [
+            (normal[0] * normal_sign, normal[2] * normal_sign, normal[1] * normal_sign)
+            for normal in mesh.normals
+        ]
+        for face_index, indexes in enumerate(mesh.faces):
             # Blenderに記録する際に使用する頂点のインデックス / Index of the vertex used when recording in Blender
             indexes.reverse()
-            vertexes = []
-            for idx in range(len(indexes)):
-                if indexes[idx] in mesh_vertexes_redirect:
-                    vertexes.append(mesh_vertexes_redirect[indexes[idx]])
-                else:
-                    vertexes.append(indexes[idx])
-            mesh_faces.append(vertexes)
+            mesh_faces.append([mesh_vertexes_redirect[idx] for idx in indexes])
             # Xファイルに記述された実際の使用する頂点のインデックス(UV登録時に使用) / Actual vertex index used in the X file (used when registering UV)
             mesh_faces_exact.append(indexes)
-            if len(mesh_faces) == indexes_size:
-                break
+            if has_normals:
+                # 面の頂点順に合わせて法線のインデックスも反転する /
+                #  Reverse the normal indices to match the face vertex order
+                normal_indexes = mesh.normal_faces[face_index]
+                normal_indexes.reverse()
+                mesh_normal_faces.append(normal_indexes)
 
         for vertex in mesh.tex_coords:
             vertex[1] = -vertex[1] + 1
             mesh_tex_coord.append(vertex)
 
-        for index in mesh.material_face_indexes:
-            mesh_material_face_indexes.append(index)
+        mesh_material_face_indexes.extend(mesh.material_face_indexes)
 
         for material in mesh.materials:
             mesh_materials.append(material)
@@ -307,6 +675,26 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                     mesh_material_face_indexes.append(0)
                 material_id = mesh_material_face_indexes[i]
                 material_faces[material_id].append(i)
+
+        # 単一マテリアルなら全頂点をそのまま使えるので変換を省略する /
+        #  With a single material all vertices can be used as-is, so skip the remap
+        single_material = material_count <= 1
+        uv_flat_all = None
+        normals_flat_all = None
+        if single_material:
+            uv_flat_all = [
+                value
+                for face in mesh_faces_exact
+                for k in face
+                for value in mesh_tex_coord[k]
+            ]
+            if has_normals:
+                normals_flat_all = [
+                    value
+                    for normal_face in mesh_normal_faces
+                    for k in normal_face
+                    for value in mesh_normals[k]
+                ]
 
         # モデル名を決定 / Determine the model name
         model_name = (
@@ -404,41 +792,75 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
             # 頂点データと面データを作成 / Create vertex data and face data
             # マテリアルが使う頂点だけを抽出、その頂点のインデックスに合わせて面の頂点のインデックスを変更 /
             #  Extract only the vertices used by the material, and change the vertex indexes of the faces to match the indexes of those vertices
-            mesh_indexes = {}
-            for i in faces:
-                face = mesh_faces[i]
-                # faces_data.append(face)
-                for k in face:
-                    if mesh_vertexes[k] in vertexes_data:
-                        mesh_indexes[k] = vertexes_data.index(mesh_vertexes[k])
-                    else:
-                        mesh_indexes[k] = len(vertexes_data)
-                        vertexes_data.append(mesh_vertexes[k])
-                count = 0
-                face_data = [0] * len(face)
-                for k in face:
-                    face_data[count] = mesh_indexes[k]
-                    count += 1
-                faces_data.append(face_data)
+            if single_material:
+                vertexes_data = mesh_vertexes
+                faces_data = mesh_faces
+                uv_flat = uv_flat_all
+                normals_flat = normals_flat_all if normals_flat_all is not None else []
+            else:
+                vertexes_data = []
+                # 辞書で重複判定を行いO(n^2)を回避 / Use a dict to avoid O(n^2) duplicate search
+                vertexes_data_map = {}
+                uv_flat = []
+                normals_flat = []
+                for i in faces:
+                    face = mesh_faces[i]
+                    exact_face = mesh_faces_exact[i]
+                    normal_face = mesh_normal_faces[i] if has_normals else None
+                    face_data = []
+                    for corner, k in enumerate(face):
+                        index = vertexes_data_map.get(k)
+                        if index is None:
+                            index = len(vertexes_data)
+                            vertexes_data_map[k] = index
+                            vertexes_data.append(mesh_vertexes[k])
+                        face_data.append(index)
+                        uv_flat.extend(mesh_tex_coord[exact_face[corner]])
+                        if normal_face is not None:
+                            normals_flat.extend(mesh_normals[normal_face[corner]])
+                    faces_data.append(face_data)
 
             # メッシュを作成 / Create mesh
             mesh = bpy.data.meshes.new("mesh")
 
-            # メッシュに頂点と面のデータを挿入 / Insert vertex and face data into the mesh
-            mesh.from_pydata(vertexes_data, [], faces_data)
+            # メッシュに頂点・面・UVを一括で挿入 / Insert vertices, faces and UVs in bulk
+            vertex_count = len(vertexes_data)
+            mesh.vertices.add(vertex_count)
+            mesh.vertices.foreach_set(
+                "co", [value for vertex in vertexes_data for value in vertex]
+            )
+
+            loop_count = sum(len(face) for face in faces_data)
+            mesh.loops.add(loop_count)
+            mesh.loops.foreach_set(
+                "vertex_index", [index for face in faces_data for index in face]
+            )
+
+            mesh.polygons.add(len(faces_data))
+            loop_starts = []
+            loop_totals = []
+            loop_start = 0
+            for face in faces_data:
+                loop_starts.append(loop_start)
+                loop_totals.append(len(face))
+                loop_start += len(face)
+            mesh.polygons.foreach_set("loop_start", loop_starts)
+            mesh.polygons.foreach_set("loop_total", loop_totals)
 
             # UVレイヤーの作成 / Create UV layer
-            mesh.uv_layers.new(name="UVMap")
-            uv = mesh.uv_layers["UVMap"]
+            uv = mesh.uv_layers.new(name="UVMap")
+            uv.data.foreach_set("uv", uv_flat)
 
-            # UVデータを頂点と紐付ける / Link UV data to vertices
-            count = 0
-            for i in faces:
-                for k in mesh_faces_exact[i]:
-                    uv.data[count].uv = mesh_tex_coord[k]
-                    count += 1
+            mesh.update(calc_edges=True)
 
-            mesh.update()
+            # 法線をカスタム法線として適用 / Apply normals as custom split normals
+            if len(normals_flat) == loop_count * 3:
+                mesh.normals_split_custom_set(
+                    [
+                        normals_flat[i : i + 3]
+                        for i in range(0, len(normals_flat), 3)
+                    ]
+                )
 
             # メッシュでオブジェクトを作成 / Create an object with the mesh
             obj = bpy.data.objects.new(model_name, mesh)
@@ -449,255 +871,13 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
             scene = bpy.context.scene
             scene.collection.objects.link(obj)
 
-    def parse_mesh_text(self, mesh: XModelMesh):
-        _object_name = self.get_object_name_text()
-        vertex_size = self.get_next_int_text()
-        for _ in range(vertex_size):
-            vertex = [
-                self.get_next_float_text(),
-                self.get_next_float_text(),
-                self.get_next_float_text(),
-            ]
-            mesh.vertices.append(vertex)
-        faces_size = self.get_next_int_text()
-        for i in range(faces_size):
-            vertex_size = self.get_next_int_text()
-            indexes = []
-            for _ in range(vertex_size):
-                indexes.append(self.get_next_int_text())
-            mesh.faces.append(indexes)
-
-        brace_count = self.text_brace_count
-
-        token = self.get_next_token_text()
-        while token is not None and self.text_brace_count >= brace_count:
-            if brace_count == self.text_brace_count:
-                if token == "MeshMaterialList":
-                    self.parse_mesh_material_list_text(mesh)
-                elif token == "MeshTextureCoords":
-                    self.parse_mesh_texture_coords_text(mesh)
-            token = self.get_next_token_text()
-
-    def parse_mesh_texture_coords_text(self, mesh: XModelMesh):
-        _object_name = self.get_object_name_text()
-        vertex_size = self.get_next_int_text()
-        for _ in range(vertex_size):
-            uv = [self.get_next_float_text(), self.get_next_float_text()]
-            mesh.tex_coords.append(uv)
-
-    def parse_mesh_material_list_text(self, mesh: XModelMesh):
-        _object_name = self.get_object_name_text()
-        mesh.material_count = self.get_next_int_text()
-        face_count = self.get_next_int_text()
-        for _ in range(face_count):
-            mesh.material_face_indexes.append(self.get_next_int_text())
-
-        brace_count = self.text_brace_count
-        token = self.get_next_token_text()
-        while token is not None and self.text_brace_count >= brace_count:
-            if brace_count == self.text_brace_count:
-                if token == "Material":
-                    self.parse_material_text(mesh)
-            token = self.get_next_token_text()
-
-    def parse_material_text(self, mesh: XModelMesh):
-        object_name = self.get_object_name_text()
-        color = (
-            self.get_next_float_text(),
-            self.get_next_float_text(),
-            self.get_next_float_text(),
-            self.get_next_float_text(),
-        )
-        power = self.get_next_float_text()
-        specular_color = (
-            self.get_next_float_text(),
-            self.get_next_float_text(),
-            self.get_next_float_text(),
-        )
-        self.skip_next_token_text(";")
-        emissive_color = (
-            self.get_next_float_text(),
-            self.get_next_float_text(),
-            self.get_next_float_text(),
-        )
-        material = XMaterial()
-        material.face_color = color
-        material.power = power
-        material.specular_color = specular_color
-        material.emission_color = emissive_color
-        material.name = object_name
-
-        brace_count = self.text_brace_count
-        token = self.get_next_token_text()
-        while token is not None and self.text_brace_count >= brace_count:
-            if brace_count == self.text_brace_count:
-                if token == "TextureFilename":
-                    material.texture_path = self.get_next_string_text()
-                    self.skip_next_token_text(";")
-            token = self.get_next_token_text()
-        mesh.materials.append(material)
-
-    def parse_frame_text(self, node: XModelNode):
-        child = XModelNode()
-        child.node_name = self.get_object_name_text()
-
-        brace_count = self.text_brace_count
-        token = self.get_next_token_text()
-        while token is not None and self.text_brace_count >= brace_count:
-            if brace_count == self.text_brace_count:
-                if token == "FrameTransformMatrix":
-                    self.skip_until_text("{")
-                    matrix = [
-                        [
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                        ],
-                        [
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                        ],
-                        [
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                        ],
-                        [
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                            self.get_next_float_text(),
-                        ],
-                    ]
-                    child.transform_matrix = mathutils.Matrix(matrix)
-                    self.skip_until_text("}")
-                elif token == "Mesh":
-                    self.parse_mesh_text(child.mesh)
-                elif token == "Frame":
-                    c = XModelNode()
-                    self.parse_frame_text(c)
-                    node.children.append(c)
-            token = self.get_next_token_text()
-        node.children.append(child)
-
-    def get_next_token_text(self):
-        start = False
-        ret = ""
-        while self.text_pos < len(self.text_content):
-            # comment
-            if (
-                len(self.text_content) + 1 < self.text_pos
-                and self.text_content[self.text_pos] == "/"
-                and self.text_content[len(self.text_content) + 1] == "/"
-                or self.text_content[self.text_pos] == "#"
-            ):
-                while self.text_pos < len(self.text_content):
-                    if (
-                        self.text_content[self.text_pos] == "\n"
-                        or self.text_content[self.text_pos] == "\r"
-                    ):
-                        break
-                    self.text_pos += 1
-            if self.is_ascii(self.text_content[self.text_pos]):
-                start = True
-                c = self.text_content[self.text_pos]
-                if (
-                    c == "{"
-                    or c == "}"
-                    or c == "["
-                    or c == "]"
-                    or c == ";"
-                    or c == ","
-                    or c == '"'
-                ):
-                    if len(ret) == 0:
-                        if c == "{":
-                            self.text_brace_count += 1
-                        elif c == "}":
-                            self.text_brace_count -= 1
-                        ret += c
-                        self.text_pos += 1
-                    return ret
-                ret += c
-            elif start:
-                break
-
-            self.text_pos += 1
-
-        if len(ret) == 0:
-            return None
-
-        return ret
-
-    def skip_until_text(self, target):
-        token = ""
-        while True:
-            token = self.get_next_token_text()
-            if token == target:
-                break
-
-    def skip_next_token_text(self, expected):
-        token = self.get_next_token_text()
-        if token != expected:
-            raise Exception(f"Unexpected token: {token}")
-
-    def get_next_int_text(self):
-        token = self.get_next_token_text()
-        while token == ";" or token == ",":
-            token = self.get_next_token_text()
-
-        if token is None:
-            raise Exception("Unexpected end of file")
-
-        return int(token)
-
-    def get_next_float_text(self):
-        token = self.get_next_token_text()
-        while token == ";" or token == ",":
-            token = self.get_next_token_text()
-
-        if token is None:
-            raise Exception("Unexpected end of file")
-
-        return float(token)
-
-    def get_next_string_text(self):
-        self.skip_until_text('"')
-        ret = ""
-        while self.text_pos < len(self.text_content):
-            if self.text_content[self.text_pos] == "\\":
-                self.text_pos += 1
-            elif self.text_content[self.text_pos] == '"':
-                self.text_pos += 1
-                break
-            else:
-                ret += self.text_content[self.text_pos]
-            self.text_pos += 1
-        if len(ret) == 0:
-            return None
-        return ret
-
-    def get_object_name_text(self):
-        token = self.get_next_token_text()
-        if token == "{":
-            return None
-        self.skip_next_token_text("{")
-        return token
-
     def is_ascii(self, c):
-        return (
-            ord(c) <= 255
-            and ord(c) != ord(" ")
-            and ord(c) != ord("\r")
-            and ord(c) != ord("\n")
-            and ord(c) != ord("\t")
-        )
+        return ord(c) <= 255 and c not in _ASCII_SKIP_CHARS
 
     def parse_token(self):
+        # limit to the current mesh brace depth
+        if self.bin_brace_count < 0:
+            raise utility.ByteBufferError("Unexpected end of file")
         token = self.byte_buffer.get_short()
         if token == TOKEN_NAME:
             length = self.byte_buffer.get_int()
@@ -716,18 +896,19 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
             self.byte_buffer.get_length(8)
         elif token == TOKEN_INTEGER_LIST:
             length = self.byte_buffer.get_int()
-            self.ret_integer_list = [0] * length
-            for i in range(length):
-                self.ret_integer_list[i] = self.byte_buffer.get_int()
+            # 一括でunpackする / Unpack in bulk
+            self.ret_integer_list = list(self.byte_buffer.get_int_list(length))
         elif token == TOKEN_FLOAT_LIST:
             length = self.byte_buffer.get_int()
-            self.ret_float_list = [0.0] * length
+            # 一括でunpackする / Unpack in bulk
             if self.float_size == 64:
-                for i in range(length):
-                    self.ret_float_list[i] = self.byte_buffer.get_double()
+                self.ret_float_list = list(
+                    self.byte_buffer.get_float_list(length, 8)
+                )
             else:
-                for i in range(length):
-                    self.ret_float_list[i] = self.byte_buffer.get_float()
+                self.ret_float_list = list(
+                    self.byte_buffer.get_float_list(length, 4)
+                )
         elif token == TOKEN_TEMPLATE:
             # テンプレートは使用する必要がないため無視する / Ignore templates as they are not needed
             self.parse_token_loop(TOKEN_CBRACE)
@@ -757,41 +938,58 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
     def parse_mesh_bin(self, mesh: XModelMesh):
         self.parse_token_loop(TOKEN_INTEGER_LIST)
         self.parse_token_loop(TOKEN_FLOAT_LIST)
-        mesh.vertices = []
-        i = 0
-        vertex_index = 0
-        while vertex_index < self.ret_integer_list[0]:
-            vertex = self.ret_float_list[i : i + 3]
-            mesh.vertices.append(vertex)
-            vertex_index += 1
-            i += 3
+        vertex_count = self.ret_integer_list[0]
+        floats = self.ret_float_list
+        # スライスで一括変換 / Convert in bulk with slices
+        mesh.vertices = [floats[i : i + 3] for i in range(0, vertex_count * 3, 3)]
         self.parse_token_loop(TOKEN_INTEGER_LIST)
         mesh.faces = []
+        indexes = self.ret_integer_list
         i = 1
-        while i < len(self.ret_integer_list):
-            length = self.ret_integer_list[i]
-            indexes = self.ret_integer_list[i + 1 : i + 1 + length]
-            mesh.faces.append(indexes)
+        while i < len(indexes):
+            length = indexes[i]
+            mesh.faces.append(indexes[i + 1 : i + 1 + length])
             i += length + 1
 
-        brace_count = self.bin_brace_count
         token = self.parse_token()
-        while brace_count <= self.bin_brace_count:
-            if brace_count == self.bin_brace_count and token == TOKEN_NAME:
+        depth = self.bin_brace_count          # mesh's own brace depth
+        while self.bin_brace_count >= depth:
+            if self.bin_brace_count == depth and token == TOKEN_NAME:
                 if self.ret_string == "MeshTextureCoords":
                     self.parse_mesh_texture_coords_bin(mesh)
                 elif self.ret_string == "MeshMaterialList":
                     self.parse_mesh_material_list_bin(mesh)
+                elif self.ret_string == "MeshNormals":
+                    self.parse_mesh_normals_bin(mesh)
             token = self.parse_token()
+
+    def parse_mesh_normals_bin(self, mesh: XModelMesh):
+        self.parse_token_loop(TOKEN_INTEGER_LIST)
+        self.parse_token_loop(TOKEN_FLOAT_LIST)
+        normal_count = self.ret_integer_list[0]
+        floats = self.ret_float_list
+        mesh.normals = [floats[i : i + 3] for i in range(0, normal_count * 3, 3)]
+        self.parse_token_loop(TOKEN_INTEGER_LIST)
+        mesh.normal_faces = []
+        indexes = self.ret_integer_list
+        i = 1
+        while i < len(indexes):
+            length = indexes[i]
+            mesh.normal_faces.append(indexes[i + 1 : i + 1 + length])
+            i += length + 1
 
     def parse_mesh_texture_coords_bin(self, mesh: XModelMesh):
         self.parse_token_loop(TOKEN_INTEGER_LIST)
         self.parse_token_loop(TOKEN_FLOAT_LIST)
-        i = 0
-        while i < len(self.ret_float_list):
-            vertex = [self.ret_float_list[i], self.ret_float_list[i + 1]]
-            mesh.tex_coords.append(vertex)
-            i += 2
+        floats = self.ret_float_list
+        # スライスで一括変換 / Convert in bulk with slices
+        if len(floats) % 2 != 0:
+            raise Exception("Invalid texture coordinate count")
+        mesh.tex_coords = [floats[i : i + 2] for i in range(0, len(floats), 2)]
+
+    def skip_to_depth(self, depth):
+        while self.bin_brace_count > depth:
+            self.parse_token()
 
     def parse_mesh_material_list_bin(self, mesh: XModelMesh):
         self.parse_token_loop(TOKEN_INTEGER_LIST)
@@ -799,15 +997,24 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         mesh.material_face_indexes = self.ret_integer_list[
             2 : self.ret_integer_list[1] + 2
         ]
-        pos = self.byte_buffer.pos
-        while True:
+        depth = self.bin_brace_count          # material list's own brace depth
+        token = self.parse_token()
+        while self.bin_brace_count >= depth:
+            if token == TOKEN_OBRACE and self.bin_brace_count == depth + 1:
+                # 参照用の "{ Name }" ブロック / Reference block "{ Name }"
+                reference = self.parse_token()
+                if reference == TOKEN_NAME:
+                    self.parse_token_loop(TOKEN_CBRACE)
+                    material = self.materials_by_name.get(self.ret_string)
+                    if material is not None:
+                        mesh.materials.append(material)
+                else:
+                    # 不明なブロックは閉じ括弧まで読み飛ばす / Skip unknown block
+                    self.skip_to_depth(self.bin_brace_count - 1)
+            elif self.bin_brace_count == depth and token == TOKEN_NAME:
+                if self.ret_string == "Material":
+                    self.parse_material_bin(mesh)
             token = self.parse_token()
-            if token == TOKEN_NAME and self.ret_string == "Material":
-                self.parse_material_bin(mesh)
-            else:
-                self.byte_buffer.pos = pos
-                break
-            pos = self.byte_buffer.pos
 
     def parse_material_bin(self, mesh: XModelMesh):
         token = self.parse_token()
@@ -842,6 +1049,8 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         if token != TOKEN_CBRACE:
             self.parse_token_loop(TOKEN_CBRACE)
         mesh.materials.append(material)
+        if material.name:
+            self.materials_by_name[material.name] = material
 
     def parse_frame_bin(self, node: XModelNode):
         child = XModelNode()
@@ -850,11 +1059,13 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
         if token == TOKEN_NAME:
             name = self.ret_string
         child.node_name = name
-        brace_count = self.bin_brace_count
+        token = self.parse_token()          # OBRACE of the frame
+        depth = self.bin_brace_count        # frame's own brace depth
         token = self.parse_token()
-        while brace_count <= self.bin_brace_count:
-            if brace_count == self.bin_brace_count and token == TOKEN_NAME:
+        while self.bin_brace_count >= depth:
+            if self.bin_brace_count == depth and token == TOKEN_NAME:
                 if self.ret_string == "FrameTransformMatrix":
+                    self.parse_token_loop(TOKEN_FLOAT_LIST)
                     matrix = [
                         self.ret_float_list[0:4],
                         self.ret_float_list[4:8],
@@ -868,9 +1079,13 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                     c = XModelNode()
                     self.parse_frame_bin(c)
                     child.children.append(c)
+            token = self.parse_token()
         node.children.append(child)
 
     def execute(self, context):
+        # 処理時間の記録 / Timing log
+        t_start = time.perf_counter()
+
         # すべてのオブジェクトとマテリアルを削除 / Delete all objects and materials
         if self.remove_all:
             for obj in bpy.context.scene.objects:
@@ -943,28 +1158,29 @@ class ImportDirectXXFile(bpy.types.Operator, ImportHelper):
                     data = f.read()
                     self.byte_buffer = utility.ByteBuffer(data)
             root_node = self.parse_bin()
+            t_parse_end = time.perf_counter()
         else:
             # テキスト / Text
             with open(self.filepath) as f:
                 x_model_file_string = f.read()
-                self.text_content = x_model_file_string
+            root_node = TextXParser(x_model_file_string).parse()
+            t_parse_end = time.perf_counter()
 
-                root_node = XModelNode()
-
-                token = self.get_next_token_text()
-                while token is not None:
-                    if self.text_brace_count == 0:
-                        if token == "template":
-                            self.get_next_token_text()
-                        elif token == "Mesh":
-                            self.parse_mesh_text(root_node.mesh)
-                        elif token == "Material":
-                            self.parse_material_text(root_node.mesh)
-                        elif token == "Frame":
-                            self.parse_frame_text(root_node)
-                    token = self.get_next_token_text()
-
+        print(
+            f"[X import] {os.path.basename(self.filepath)}: "
+            f"read+parse {t_parse_end - t_start:.3f}s "
+            f"({'compressed' if self.is_compressed else 'binary' if self.is_binary else 'text'})"
+        )
+        mesh = root_node.mesh
+        print(
+            f"[X import] data: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces, "
+            f"{len(mesh.tex_coords)} uvs, {len(mesh.materials)} materials"
+        )
         self.create_obj_from_node(mathutils.Matrix.Identity(4), root_node)
+        print(
+            f"[X import] create objects: {time.perf_counter() - t_parse_end:.3f}s"
+            f" (total {time.perf_counter() - t_start:.3f}s)"
+        )
 
         return {"FINISHED"}
 
@@ -1034,6 +1250,10 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
         if not self.filepath.endswith(".x"):
             return {"CANCELLED"}
 
+        # 処理時間の記録 / Timing log
+        t_total = time.perf_counter()
+        t_start = t_total
+
         # ModelDataUtilityでBlenderのデータを整形 / Format Blender data with ModelDataUtility
         model_data_utility = ModelDataUtility()
         model_data_utility.execute(
@@ -1050,6 +1270,18 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
         faces_use_material = model_data_utility.faces_use_material
         uv_data = model_data_utility.uv_data
 
+        def print_timing(step):
+            nonlocal t_start
+            now = time.perf_counter()
+            print(f"[X export] {step}: {now - t_start:.3f}s")
+            t_start = now
+
+        print(
+            f"[X export] data: {len(vertexes)} vertices, {len(faces)} faces, "
+            f"{len(normals)} normals, {len(uv_data)} uvs, {len(x_materials)} materials"
+        )
+        print_timing("prepare")
+
         is_binary = False
         if self.mode == "binary":
             is_binary = True
@@ -1059,14 +1291,14 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
         if is_binary:
             with open(self.filepath, mode="wb") as f:
                 # テンプレート
+                # すべてメモリにバッファリングし、最後に一括で書き込む /
+                #  Buffer everything in memory and write it in bulk at the end
                 if self.mode == "binary_zip":
                     f.write(b"xof 0302bzip0032")
-                    uncompressed_buffer = utility.ByteBuffer(bytes())
-                    target = uncompressed_buffer
                 else:
                     f.write(b"xof 0302bin 0032")
-                    target = f
-                    uncompressed_buffer = None
+                target = utility.ByteBuffer(bytes())
+                uncompressed_buffer = target if self.mode == "binary_zip" else None
                 if not self.export_minimum:
                     # テンプレートデータを書き出す / Write template data
                     write_shorts(target, [TOKEN_TEMPLATE, TOKEN_NAME])
@@ -1438,20 +1670,22 @@ class ExportDirectXXFile(bpy.types.Operator, ExportHelper):
                         write_shorts(target, [TOKEN_SEMICOLON, TOKEN_CBRACE])
                     write_shorts(target, [TOKEN_CBRACE])
                 write_shorts(target, [TOKEN_CBRACE, TOKEN_CBRACE])
+                print_timing("build binary buffer")
                 # flate圧縮 / Flate compression
                 if self.mode == "binary_zip" and uncompressed_buffer is not None:
-                    f.write(struct.pack("<I", uncompressed_buffer.length() + 16))
-                    uncompressed_buffer.pos = 0
+                    data = uncompressed_buffer.array
+                    f.write(struct.pack("<I", len(data) + 16))
                     MSZIP_BLOCK = 0x8000
-                    while uncompressed_buffer.has_remaining():
-                        length = min(uncompressed_buffer.remaining(), MSZIP_BLOCK)
-                        compressed_data = zlib.compress(
-                            uncompressed_buffer.get_length(length)
-                        )[2:]
-                        f.write(struct.pack("<H", length))
-                        f.write(struct.pack("<H", len(compressed_data) + 2))
-                        f.write("CK".encode())
+                    for offset in range(0, len(data), MSZIP_BLOCK):
+                        block = data[offset : offset + MSZIP_BLOCK]
+                        compressed_data = zlib.compress(block)[2:]
+                        f.write(struct.pack("<HH", len(block), len(compressed_data) + 2))
+                        f.write(b"CK")
                         f.write(compressed_data)
+                else:
+                    # 一括で書き込む / Write in bulk
+                    f.write(target.array)
+                print_timing("write file")
         else:
             x_file_content = "xof 0302txt 0032\n"
 
@@ -1540,32 +1774,46 @@ template TextureFilename {
 """
 
             x_file_content += "Mesh {\n"
-            x_file_content += " " + str(len(vertexes)) + ";\n"
+
+            # 各セクションは「ヘッダ + カンマ区切りの行 + 最後の要素」で構成する /
+            #  Each section is "header + comma-separated lines + final element"
+            def append_list(lines, prefix, last_line=None):
+                nonlocal x_file_content
+                if not lines:
+                    return
+                x_file_content += prefix + str(len(lines)) + ";\n"
+                if last_line is None:
+                    lines[-1] = lines[-1][:-2] + ";\n"
+                else:
+                    lines[-1] = last_line
+                x_file_content += "".join(lines)
 
             # 頂点データ / Vertex data
-            for vertex in vertexes:
-                x_file_content += " " + vertex_to_str(vertex) + ";,\n"
-            x_file_content = x_file_content[0:-2] + ";\n"
+            append_list([" " + vertex_to_str(vertex) + ";,\n" for vertex in vertexes], " ")
+            print_timing("vertices")
 
             # 面データ / Face data
-            x_file_content += " " + str(len(faces)) + ";\n"
-            for face in faces:
-                x_file_content += (
-                    " "
-                    + str(len(face))
-                    + ";"
-                    + str(face).replace(" ", "")[1:-1]
-                    + ";,\n"
-                )
-            x_file_content = x_file_content[0:-2] + ";\n\n"
+            append_list(
+                [
+                    " " + str(len(face)) + ";" + str(face).replace(" ", "")[1:-1] + ";,\n"
+                    for face in faces
+                ],
+                " ",
+            )
+            x_file_content += "\n"
+            print_timing("faces")
 
             # マテリアルデータ / Material data
             x_file_content += " MeshMaterialList {\n"
             x_file_content += "  " + str(len(x_materials)) + ";\n"
-            x_file_content += "  " + str(len(faces_use_material)) + ";\n"
-            for material_index in faces_use_material:
-                x_file_content += "  " + str(material_index) + ",\n"
-            x_file_content = x_file_content[0:-2] + ";\n\n"
+            # 面が1つもない場合、リストは書き出さない / Don't write the list when there are no faces
+            if faces_use_material:
+                append_list(
+                    ["  " + str(material_index) + ",\n" for material_index in faces_use_material],
+                    "  ",
+                )
+            x_file_content += "\n"
+            print_timing("material list")
 
             for x_material in x_materials:
                 if self.export_material_name and x_material.name:
@@ -1609,44 +1857,44 @@ template TextureFilename {
                     x_file_content += "\n   TextureFilename {\n"
                     x_file_content += '    "' + x_material.texture_path + '";\n'
                     x_file_content += "   }\n"
-                x_file_content += "  }\n\n"
-            x_file_content = x_file_content[0:-1]
+                x_file_content += "  }\n"
             x_file_content += " }\n\n"
+            print_timing("materials")
 
             # 法線データ / Normal data
-            x_file_content += " MeshNormals {\n"
-            x_file_content += "  " + str(len(normals)) + ";\n"
-            for normal in normals:
-                x_file_content += "  " + vertex_to_str(normal) + ";,\n"
-            x_file_content = x_file_content[0:-2] + ";\n"
-            x_file_content += "  " + str(len(vertex_use_normal)) + ";\n"
-            for vertex in vertex_use_normal:
-                x_file_content += (
-                    "  "
-                    + str(len(vertex))
-                    + ";"
-                    + str(vertex).replace(" ", "")[1:-1]
-                    + ";,\n"
-                )
-            x_file_content = x_file_content[0:-2] + ";\n"
-            x_file_content += " }\n\n"
+            x_file_content += "MeshNormals {\n"
+            append_list(["  " + vertex_to_str(normal) + ";,\n" for normal in normals], " ")
+            append_list(
+                [
+                    "  " + str(len(vertex)) + ";" + str(vertex).replace(" ", "")[1:-1] + ";,\n"
+                    for vertex in vertex_use_normal
+                ],
+                " ",
+            )
+            x_file_content += "}\n\n"
+            print_timing("normals")
 
             # UVデータ / UV data
-            x_file_content += " MeshTextureCoords {\n"
-            x_file_content += "  " + str(len(uv_data)) + ";\n"
-            for vertex in uv_data:
-                x_file_content += (
+            x_file_content += "MeshTextureCoords {\n"
+            append_list(
+                [
                     "  "
                     + float_to_str(vertex[0])
                     + ";"
                     + float_to_str(-vertex[1] + 1)
                     + ";,\n"
-                )
-            x_file_content = x_file_content[0:-2] + ";\n"
-            x_file_content += " }\n"
-            x_file_content += "}\n"
+                    for vertex in uv_data
+                ],
+                " ",
+            )
+            # MeshTextureCoords と Mesh を閉じる / Close MeshTextureCoords and Mesh
+            x_file_content += " }\n}\n"
+            print_timing("uvs")
 
             with open(self.filepath, mode="w") as f:
                 f.write(x_file_content)
+            print_timing("write file")
+
+        print(f"[X export] done: {time.perf_counter() - t_total:.3f}s total")
 
         return {"FINISHED"}
