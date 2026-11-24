@@ -1,0 +1,12 @@
+CreateMeshBuilder,
+AddVertex,0.000000,4.000000,0.000000
+AddVertex,2.000000,0.000000,0.000000
+AddVertex,0.000000,0.000000,0.000000
+AddFace,0,1,2
+GenerateNormals
+LoadTexture,csv_texture.png
+SetDecalTransparentColor,0,0,0,255
+SetColor,255,255,255,255
+SetTextureCoordinates,0,0.000000,0.000000
+SetTextureCoordinates,1,1.000000,1.000000
+SetTextureCoordinates,2,0.000000,1.000000

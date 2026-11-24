@@ -1,0 +1,12 @@
+CreateMeshBuilder,
+AddVertex,0.000000,4.000000,0.000000,0.000000,0.000000,-1.000000
+AddVertex,2.000000,0.000000,0.000000,0.000000,0.000000,-1.000000
+AddVertex,0.000000,0.000000,0.000000,0.000000,0.000000,-1.000000
+AddFace2,0,1,2
+LoadTexture,csv_texture.png,
+SetWrapMode,ClampClamp
+SetColor,255,255,255,255
+SetEmissiveColor,0,0,0
+SetTextureCoordinates,0,0.000000,0.000000
+SetTextureCoordinates,1,1.000000,1.000000
+SetTextureCoordinates,2,0.000000,1.000000
