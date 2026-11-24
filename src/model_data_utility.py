@@ -1,10 +1,9 @@
 import re
 import bpy
 import math
+import time
 
 from .types import CustomOpenBveCsvNode
-
-from .utility import vertex_to_str
 
 
 class OpenBveCsvProperty:
@@ -31,6 +30,30 @@ class Material:
     name = ""
     openbve_csv_property: OpenBveCsvProperty | None = None
     texture_extension = "REPEAT"
+
+
+def get_base_color_texture(material):
+    # ノードが無効な場合はテクスチャなし / No texture when nodes are disabled
+    if not material.use_nodes:
+        return ""
+    # プリンシプルBSDFを取得 / Get the Principled BSDF
+    nodes = material.node_tree.nodes
+    principled = next(
+        (n for n in nodes if n.bl_idname == "ShaderNodeBsdfPrincipled"),
+        None,
+    )
+    if principled is None:
+        raise Exception(
+            bpy.app.translations.pgettext(
+                "Principled BSDF node not found in material: "
+            )
+            + f" {material.name}"
+        )
+    # Base Colorに接続されたテクスチャを探す / Find the texture connected to Base Color
+    for link in principled.inputs["Base Color"].links:
+        if link.from_node.bl_idname == "ShaderNodeTexImage":
+            return bpy.path.basename(link.from_node.image.filepath)
+    return ""
 
 
 def gen_fake_material():
@@ -92,123 +115,180 @@ class ModelDataUtility:
 
         material_name_set = set()
 
+        # depsgraphはオブジェクトループの外で1回だけ取得 / Get the depsgraph once outside the object loop
+        depsgraph = bpy.context.evaluated_depsgraph_get()
         target_objects = bpy.context.scene.objects
         if export_selected_only:
             target_objects = bpy.context.selected_objects
         for obj in target_objects:
             if obj.type == "MESH" and not obj.hide_get():
+                t_obj = time.perf_counter()
                 # モディファイヤーを適用した状態のオブジェクトを取得
-                depsgraph = bpy.context.evaluated_depsgraph_get()
                 obj_tmp = obj.evaluated_get(depsgraph)
 
                 # Meshに変換
                 mesh = obj_tmp.to_mesh(
                     preserve_all_data_layers=True, depsgraph=depsgraph
                 )
+                print(
+                    f"[X export] mesh '{obj.name}': {len(mesh.polygons)} polygons "
+                    f"(to_mesh {time.perf_counter() - t_obj:.3f}s)"
+                )
 
                 # UVマップが存在しないメッシュではactiveがNoneになる
                 uv_layer = mesh.uv_layers.active
-                uv_vertexes = uv_layer.data if uv_layer is not None else None
-                vertex_index = 0
-                # 法線取得用
-                loops = mesh.loops
-                for polygon in mesh.polygons:
+                # 逆行列と法線変換行列は頂点ごとに計算せず、オブジェクトごとに1回だけ計算する /
+                #  Compute the inverse and normal matrices once per object, not per vertex
+                matrix_world = obj.matrix_world
+                mx_inv = matrix_world.inverted()
+                mx_norm = mx_inv.transposed().to_3x3()
+
+                vertex_count = len(mesh.vertices)
+                loop_count = len(mesh.loops)
+                polygon_count = len(mesh.polygons)
+
+                # bpyの要素アクセスは高コストなので foreach_get で一括取得する /
+                #  Element access in bpy is expensive, so fetch everything with foreach_get
+                coords = [0.0] * (vertex_count * 3)
+                mesh.vertices.foreach_get("co", coords)
+                loop_vertexes = [0] * loop_count
+                mesh.loops.foreach_get("vertex_index", loop_vertexes)
+                loop_normals = [0.0] * (loop_count * 3)
+                try:
+                    mesh.corner_normals.foreach_get("vector", loop_normals)
+                except Exception:
+                    mesh.loops.foreach_get("normal", loop_normals)
+                loop_starts = [0] * polygon_count
+                mesh.polygons.foreach_get("loop_start", loop_starts)
+                loop_totals = [0] * polygon_count
+                mesh.polygons.foreach_get("loop_total", loop_totals)
+                polygon_materials = [0] * polygon_count
+                mesh.polygons.foreach_get("material_index", polygon_materials)
+
+                uv_coords = None
+                if uv_layer is not None:
+                    uv_coords = [0.0] * (loop_count * 2)
+                    uv_layer.data.foreach_get("uv", uv_coords)
+
+                # 行列の要素をローカルに取り出してベクトル生成を避ける /
+                #  Take the matrix elements locally to avoid allocating Vectors
+                m00, m01, m02, m03 = matrix_world[0]
+                m10, m11, m12, m13 = matrix_world[1]
+                m20, m21, m22, m23 = matrix_world[2]
+                # ワールド座標の頂点を事前計算 / Precompute world-space vertices
+                world_vertexes = [None] * vertex_count
+                for i in range(vertex_count):
+                    i3 = i * 3
+                    x = coords[i3]
+                    y = coords[i3 + 1]
+                    z = coords[i3 + 2]
+                    world_vertexes[i] = (
+                        (m00 * x + m01 * y + m02 * z + m03) * scale,
+                        (m10 * x + m11 * y + m12 * z + m13) * scale,
+                        (m20 * x + m21 * y + m22 * z + m23) * scale,
+                    )
+
+                # ワールド法線を事前計算 / Precompute world-space normals
+                n00, n01, n02 = mx_norm[0]
+                n10, n11, n12 = mx_norm[1]
+                n20, n21, n22 = mx_norm[2]
+                sqrt = math.sqrt
+                world_normals = [None] * loop_count
+                for i in range(loop_count):
+                    i3 = i * 3
+                    x = loop_normals[i3]
+                    y = loop_normals[i3 + 1]
+                    z = loop_normals[i3 + 2]
+                    nx = n00 * x + n01 * y + n02 * z
+                    ny = n10 * x + n11 * y + n12 * z
+                    nz = n20 * x + n21 * y + n22 * z
+                    length = sqrt(nx * nx + ny * ny + nz * nz)
+                    if length != 0.0:
+                        nx /= length
+                        ny /= length
+                        nz /= length
+                    world_normals[i] = (nx, ny, nz)
+
+                materials_list = list(mesh.materials)
+                material_names = [
+                    material.name if material is not None else None
+                    for material in materials_list
+                ]
+                material_count = len(materials_list)
+                # マテリアルごとのテクスチャを事前に解決し、ポリゴンごとのノードツリー走査を避ける /
+                #  Resolve per-material textures in advance to avoid scanning node trees per polygon
+                mesh_material_textures = {}
+                vertexes_dict_get = vertexes_dict.get
+                normals_dict_get = normals_dict.get
+                for p in range(polygon_count):
+                    start = loop_starts[p]
+                    total = loop_totals[p]
                     ver = []
                     normal = []
-                    nor = polygon.normal
-                    vertex_index += len(polygon.vertices) - 1
                     texture = ""
-                    if len(mesh.materials) == 0:
-                        if fake_material.name not in materials_dict.keys():
-                            materials_dict[fake_material.name] = len(
-                                materials_dict.keys()
-                            )
+                    if material_count == 0:
+                        if fake_material.name not in materials_dict:
+                            materials_dict[fake_material.name] = len(materials_dict)
                             materials.append(fake_material)
                         self.faces_use_material.append(
                             materials_dict[fake_material.name]
                         )
                     else:
-                        for material in mesh.materials:
-                            if material is None:
-                                # マテリアルを追加したが、新規ボタンを押していない状態のマテリアルの場合
-                                continue
-                            if material.name not in materials_dict.keys():
-                                materials_dict[material.name] = len(
-                                    materials_dict.keys()
-                                )
+                        material_index = polygon_materials[p]
+                        material = materials_list[material_index]
+                        if material is not None:  # 新規ボタンを押していない状態のマテリアル
+                            material_name = material_names[material_index]
+                            if material_name not in materials_dict:
+                                materials_dict[material_name] = len(materials_dict)
                                 materials.append(material)
-                            if material.use_nodes:
-                                # ノードを取得
-                                nodes = material.node_tree.nodes
-                                # プリンシプルBSDFを取得
-                                principled = next(
-                                    (
-                                        n
-                                        for n in nodes
-                                        if n.bl_idname == "ShaderNodeBsdfPrincipled"
-                                    ),
-                                    None,
+                            # 事前に解決したテクスチャを使用する / Use the pre-resolved texture
+                            if material_name not in mesh_material_textures:
+                                mesh_material_textures[material_name] = (
+                                    get_base_color_texture(material)
                                 )
-                                if principled is None:
-                                    raise Exception(
-                                        bpy.app.translations.pgettext(
-                                            "Principled BSDF node not found in material: "
-                                        )
-                                        + f" {material.name}"
-                                    )
-                                # テクスチャの有無を確認
-                                if len(principled.inputs["Base Color"].links) > 0:
-                                    for link in principled.inputs["Base Color"].links:
-                                        if (
-                                            link.from_node.bl_idname
-                                            == "ShaderNodeTexImage"
-                                        ):
-                                            texture = bpy.path.basename(
-                                                link.from_node.image.filepath
-                                            )
-                        self.faces_use_material.append(
-                            materials_dict[mesh.materials[polygon.material_index].name]
-                        )
+                            texture = mesh_material_textures[material_name]
+                            self.faces_use_material.append(
+                                materials_dict[material_name]
+                            )
 
-                    for vertex, loop_index in zip(
-                        reversed(polygon.vertices), reversed(polygon.loop_indices)
-                    ):
-                        # ワールド座標から変換
-                        vertex_co = obj.matrix_world @ mesh.vertices[vertex].co
-                        # 法線を取得する
-                        nor = loops[loop_index].normal
-                        mx_inv = obj.matrix_world.inverted()
-                        mx_norm = mx_inv.transposed().to_3x3()
-                        world_norm = mx_norm @ nor
-                        world_norm.normalize()
-                        # スケールに合わせる
-                        vertex_co[0] *= scale
-                        vertex_co[1] *= scale
-                        vertex_co[2] *= scale
+                    for loop_index in range(start + total - 1, start - 1, -1):
+                        vertex_co = world_vertexes[loop_vertexes[loop_index]]
                         # 頂点が他のデータと重複していたらそれを使用する
                         # 頂点とUVはセットなのでセットで重複を調べる
-                        if uv_vertexes is not None:
-                            uv = uv_vertexes[vertex_index].uv
+                        if uv_coords is not None and texture != "":
+                            uv = (
+                                uv_coords[loop_index * 2],
+                                uv_coords[loop_index * 2 + 1],
+                            )
                         else:
                             uv = (0.0, 0.0)
-                        if texture == "":
-                            uv = (0.0, 0.0)
-                        key = vertex_to_str(vertex_co) + str(uv)
-                        if key not in vertexes_dict.keys():
-                            vertexes_dict[key] = len(vertexes_dict.keys())
+                        # 文字列連結の代わりに丸めたチュープルをキーにする /
+                        #  Use a plain tuple of the raw floats as the key; floats hash
+                        #  the same for values produced by the same computation
+                        key = (
+                            vertex_co[0],
+                            vertex_co[1],
+                            vertex_co[2],
+                            uv[0],
+                            uv[1],
+                        )
+                        index = vertexes_dict_get(key)
+                        if index is None:
+                            index = len(vertexes_dict)
+                            vertexes_dict[key] = index
                             self.vertexes.append(vertex_co)
                             self.uv_data.append(uv)
-                        if vertex_to_str(world_norm) not in normals_dict.keys():
-                            normals_dict[vertex_to_str(world_norm)] = len(
-                                normals_dict.keys()
-                            )
+                        world_norm = world_normals[loop_index]
+                        normal_index = normals_dict_get(world_norm)
+                        if normal_index is None:
+                            normal_index = len(normals_dict)
+                            normals_dict[world_norm] = normal_index
                             self.normals.append(world_norm)
-                        ver.append(vertexes_dict[key])
-                        normal.append(normals_dict[vertex_to_str(world_norm)])
-                        vertex_index -= 1
-                    vertex_index += len(polygon.vertices) + 1
+                        ver.append(index)
+                        normal.append(normal_index)
                     self.faces.append(ver)
                     self.vertex_use_normal.append(normal)
+                print(f"[X export] mesh '{obj.name}' done: {time.perf_counter() - t_obj:.3f}s")
 
         for material in materials:
             if material is None:
